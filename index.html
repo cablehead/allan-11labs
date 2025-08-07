@@ -95,12 +95,25 @@
   </style>
 </head>
 <body>
+  <script>
+    // Ensure links work correctly with reverse proxy
+    document.addEventListener('DOMContentLoaded', function() {
+      const currentPath = window.location.pathname;
+      const basePath = currentPath.endsWith('/') ? currentPath : currentPath + '/';
+      
+      // Update all relative links to be absolute based on current path
+      document.querySelectorAll('a[href^="./"]').forEach(link => {
+        const relativePath = link.getAttribute('href').substring(2); // remove './'
+        link.href = basePath + relativePath;
+      });
+    });
+  </script>
   <div class="container">
     <h1>ElevenLabs AI Tools</h1>
     <div class="subtitle">Choose your AI-powered voice experience</div>
     
     <div class="tools-grid">
-      <a href="text-to-voice/" class="tool-card">
+      <a href="./text-to-voice/" class="tool-card">
         <div class="tool-icon">📝</div>
         <div class="tool-title">Text-to-Voice</div>
         <div class="tool-description">
@@ -109,7 +122,7 @@
         </div>
       </a>
       
-      <a href="voice-to-voice/" class="tool-card">
+      <a href="./voice-to-voice/" class="tool-card">
         <div class="tool-icon">🗣️</div>
         <div class="tool-title">Voice-to-Voice</div>
         <div class="tool-description">
