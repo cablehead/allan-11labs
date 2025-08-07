@@ -168,6 +168,7 @@
     let stream = null;
     let worklet = null;
     let isCapturing = false;
+    let isShuttingDown = false;
     let stats = {
       chunks: 0,
       bytes: 0,
@@ -231,8 +232,8 @@
     }
 
     async function sendAudioChunk(audioData) {
-      if (!sessionId || !isCapturing) {
-        addLog(`⚠️ Rejected audio chunk - sessionId: ${!!sessionId}, isCapturing: ${isCapturing}`);
+      if (!sessionId || !isCapturing || isShuttingDown) {
+        addLog(`⚠️ Rejected audio chunk - sessionId: ${!!sessionId}, isCapturing: ${isCapturing}, isShuttingDown: ${isShuttingDown}`);
         return;
       }
 
@@ -292,6 +293,9 @@
       try {
         addLog('🚀 Starting server-based audio capture...');
         
+        // Reset shutdown flag
+        isShuttingDown = false;
+        
         // Start server session first
         if (!(await startSession())) {
           return;
@@ -347,9 +351,9 @@
         
         // Handle audio data from worklet
         worklet.port.onmessage = ({ data }) => {
-          // Only process if we're still capturing
-          if (!isCapturing) {
-            addLog(`⚠️ Worklet sent data after stop - ignoring`);
+          // Only process if we're still capturing and not shutting down
+          if (!isCapturing || isShuttingDown) {
+            addLog(`⚠️ Worklet sent data after stop - ignoring (isCapturing: ${isCapturing}, isShuttingDown: ${isShuttingDown})`);
             return;
           }
           
@@ -409,11 +413,16 @@
     }
 
     function cleanup() {
-      // Set capturing to false immediately to stop processing new audio
+      // Set flags to stop ALL processing immediately
+      isShuttingDown = true;
       isCapturing = false;
       
       if (worklet) {
-        // Send stop message to worklet first
+        // Clear the message handler FIRST to stop processing any queued messages
+        worklet.port.onmessage = null;
+        addLog('🔇 AudioWorklet message handler cleared');
+        
+        // Send stop message to worklet
         try {
           worklet.port.postMessage({ action: 'stop' });
           addLog('🛭 Stop signal sent to AudioWorklet');
@@ -421,17 +430,10 @@
           addLog(`❌ Error sending stop signal: ${e.message}`);
         }
         
-        // Small delay to let the worklet process the stop message
-        setTimeout(() => {
-          if (worklet) {
-            // Clear the message handler
-            worklet.port.onmessage = null;
-            // Disconnect the worklet node
-            worklet.disconnect();
-            worklet = null;
-            addLog('🔌 AudioWorklet disconnected');
-          }
-        }, 100);
+        // Disconnect immediately - no delay
+        worklet.disconnect();
+        worklet = null;
+        addLog('🔌 AudioWorklet disconnected immediately');
       }
       
       if (stream) {
