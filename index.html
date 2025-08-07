@@ -61,7 +61,7 @@
     function loadSavedApiKey() {
       const savedApiKey = localStorage.getItem('elevenlabs_api_key');
       if (savedApiKey) {
-        log(`📁 Loaded saved API key: ${maskApiKey(savedApiKey)}`);
+        log(`Loaded saved API key: ${maskApiKey(savedApiKey)}`);
         document.getElementById('apiKey').value = savedApiKey;
         if (savedApiKey.length > 20) loadVoices(savedApiKey);
       }
@@ -91,10 +91,10 @@
         });
         
         voiceSelect.disabled = false;
-        log(`✅ Loaded ${data.voices.length} voices`);
+        log(`Loaded ${data.voices.length} voices`);
       } catch (error) {
         voiceSelect.innerHTML = '<option value="">Error loading voices</option>';
-        log(`❌ Error loading voices: ${error.message}`);
+        log(`Error loading voices: ${error.message}`);
       }
     }
 
@@ -113,9 +113,9 @@
         src.start(startTime);
         currentTimeRef.value = startTime + buffer.duration;
         
-        log(`▶️ Playing audio: ${buffer.duration.toFixed(2)}s`);
+        log(`Playing audio: ${buffer.duration.toFixed(2)}s`);
       } catch (e) {
-        log(`❌ Audio error: ${e.message}`);
+        log(`Audio error: ${e.message}`);
       }
     }
 
@@ -126,7 +126,7 @@
       const text = "Hello world! This is a test of the ElevenLabs streaming API. The quick brown fox jumps over the lazy dog. This text should be long enough to trigger audio generation based on the character thresholds.";
       
       // Send BOS message
-      log('📤 Initializing stream');
+      log('Initializing stream');
       ws.send(JSON.stringify({
         text: " ",
         voice_settings: { stability: 0.5, similarity_boost: 0.8 },
@@ -135,19 +135,19 @@
       
       await new Promise(r => setTimeout(r, 1000));
       if (ws.readyState !== WebSocket.OPEN) {
-        log('❌ Authentication failed');
+        log('Authentication failed');
         return;
       }
       
       // Send text
-      log(`📝 Streaming text (${text.length} chars)`);
+      log(`Streaming text (${text.length} chars)`);
       ws.send(JSON.stringify({ text: text }));
       
       await new Promise(r => setTimeout(r, 1000));
       
       // Send EOS
       if (ws.readyState === WebSocket.OPEN) {
-        log('🏁 Finalizing stream');
+        log('Finalizing stream');
         ws.send(JSON.stringify({ text: "" }));
       }
     }
@@ -158,7 +158,7 @@
       saveApiKey(apiKey);
       
       if (apiKey.length > 20) {
-        log(`🔑 API Key entered: ${maskApiKey(apiKey)}`);
+        log(`API Key entered: ${maskApiKey(apiKey)}`);
         loadVoices(apiKey);
       } else {
         const voiceSelect = document.getElementById('voiceId');
@@ -170,7 +170,7 @@
     document.getElementById('voiceId').addEventListener('change', (e) => {
       if (e.target.value) {
         const selectedOption = e.target.options[e.target.selectedIndex];
-        log(`🎤 Voice selected: ${selectedOption.textContent}`);
+        log(`Voice selected: ${selectedOption.textContent}`);
       }
     });
 
@@ -180,7 +180,7 @@
       const voiceSelect = document.getElementById('voiceId');
       voiceSelect.innerHTML = '<option value="">Enter API key first to load voices...</option>';
       voiceSelect.disabled = true;
-      log('🗑️ API key cleared');
+      log('API key cleared');
     });
 
     document.getElementById('startBtn').onclick = () => {
@@ -188,11 +188,11 @@
       const voiceId = document.getElementById('voiceId').value.trim();
       
       if (!apiKey || !voiceId) {
-        log('❌ API Key and Voice selection required');
+        log('API Key and Voice selection required');
         return;
       }
       
-      log('🚀 Starting streaming with eleven_flash_v2_5');
+      log('Starting streaming with eleven_flash_v2_5');
       currentTimeRef.value = 0; // Reset audio timing
 
       const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream-input?model_id=eleven_flash_v2_5`;
@@ -201,7 +201,7 @@
       let bufferQueue = Promise.resolve();
 
       ws.onopen = () => {
-        log('🔗 WebSocket connected');
+        log('WebSocket connected');
         streamText(ws, apiKey);
       };
 
@@ -215,21 +215,21 @@
           }
           
           if (msg.isFinal) {
-            log('✅ Stream completed');
+            log('Stream completed');
             setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.close(); }, 1000);
           }
           
           if (msg.error || msg.message) {
-            log(`⚠️ Server error: ${msg.error || msg.message}`);
+            log(`Server error: ${msg.error || msg.message}`);
           }
         } catch (e) {
-          log(`❌ Parse error: ${e.message}`);
+          log(`Parse error: ${e.message}`);
         }
       };
 
-      ws.onerror = (err) => log(`❌ WebSocket error: ${err.message || 'Unknown'}`);
+      ws.onerror = (err) => log(`WebSocket error: ${err.message || 'Unknown'}`);
       ws.onclose = (event) => {
-        if (event.code !== 1000) log(`⚠️ WebSocket closed unexpectedly: ${event.code}`);
+        if (event.code !== 1000) log(`WebSocket closed unexpectedly: ${event.code}`);
       };
     };
 
