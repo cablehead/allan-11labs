@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ElevenLabs Token‑by‑Token TTS</title>
+</head>
+<body>
+  <h1>ElevenLabs Token‑by‑Token TTS Demo</h1>
+  <p id="status">Connecting...</p>
+  <audio id="audio" autoplay></audio>
+
+  <script>
+    const voiceId = "YOUR_VOICE_ID";
+    const apiKey = "YOUR_API_KEY";
+    const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input?model_id=eleven_flash_v2_5&auto_mode=true&sync_alignment=true`;
+    const ws = new WebSocket(wsUrl);
+
+    const textChunks = [
+      "“Mom, I left my lunch box at the streetcar stop,” my daughter said, voice full of worry.",
+      "“Don’t fret,” I replied gently, “we’ll grab a snack on our way home.”"
+    ];
+
+    const audioElem = document.getElementById("audio");
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let bufferQueue = Promise.resolve();
+
+    ws.onopen = () => {
+      document.getElementById("status").textContent = "WebSocket open. Sending voice settings…";
+      ws.send(JSON.stringify({
+        text: "",
+        voice_settings: { speed: 1.0, stability: 0.5, similarity_boost: 0.8 },
+        xi_api_key: apiKey
+      }));
+      sendChunks();
+    };
+
+    async function sendChunks() {
+      document.getElementById("status").textContent = "Streaming text…";
+      for (const chunk of textChunks) {
+        ws.send(JSON.stringify({ text: chunk, try_trigger_generation: true }));
+        // small delay to mimic token-by-token streaming
+        await new Promise(res => setTimeout(res, 200));
+      }
+      ws.send(JSON.stringify({ text: "" })); // flush/end
+      document.getElementById("status").textContent = "Sent all text.";
+    }
+
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.audio) {
+        const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
+        bufferQueue = bufferQueue.then(() => playChunk(bytes));
+      }
+      if (msg.isFinal) {
+        document.getElementById("status").textContent = "Audio stream complete.";
+      }
+    };
+
+    async function playChunk(bytes) {
+      const buffer = await audioCtx.decodeAudioData(bytes.buffer);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioCtx.destination);
+      src.start();
+    }
+
+    ws.onerror = (err) => {
+      document.getElementById("status").textContent = "WebSocket error: " + err;
+      console.error(err);
+    };
+    ws.onclose = () => {
+      document.getElementById("status").textContent = "WebSocket closed.";
+    };
+  </script>
+</body>
+</html>
