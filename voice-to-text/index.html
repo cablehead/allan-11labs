@@ -147,7 +147,7 @@
     <h3>ElevenLabs Configuration</h3>
     <label>API Key:</label>
     <div class="flex">
-      <input type="password" id="apiKey" placeholder="Enter ElevenLabs API key">
+      <input type="password" id="apiKey" autocomplete="off" placeholder="Enter ElevenLabs API key">
       <button id="clear">Clear</button>
     </div>
     
@@ -282,11 +282,13 @@
         type: "conversation_initiation_client_data",
         conversation_initiation_client_data: {
           client_supplied_trace_id: crypto.randomUUID(),
-          xi_api_key: apiKey.value // Add API key to init packet
+          xi_api_key: apiKey.value,
+          llm: { provider: "custom" }, // Custom LLM so we get user_transcript events
+          text_to_speech: { model_id: "eleven_flash_v2_5" }
         }
       };
       ws.send(JSON.stringify(init));
-      addLog("🪄 Session initialization sent with API key");
+      addLog("🪄 Session initialization sent - custom LLM for transcripts");
     }
 
     async function handleServerEvent({ data }) {
@@ -296,6 +298,12 @@
       if (msg.type !== "ping") {
         console.debug("📨 Received:", msg.type, msg);
         addLog(`📨 Server event: ${msg.type}`);
+        
+        // Cancel the "no response" timeout since we got something
+        if (window._responseTimeout) {
+          clearTimeout(window._responseTimeout);
+          window._responseTimeout = null;
+        }
       }
 
       switch (msg.type) {
@@ -421,22 +429,21 @@
             b64 = btoa(bin);
           }
 
-          // Send audio chunk to ElevenLabs - try different format
+          // Back to JSON format - server confirmed it expects JSON messages
           const audioMessage = {
             type: "user_audio_chunk",
-            user_audio_chunk_event: {  // Maybe it needs _event suffix?
-              audio_base_64: b64,      // Maybe it needs _base_64 suffix?
-              timestamp: Date.now()
+            user_audio_chunk_event: {  // Try with _event suffix again
+              audio_base_64: b64       // Try with _base_64 suffix again
             }
           };
           
           ws.send(JSON.stringify(audioMessage));
           
-          // Also try without timestamp
-          // ws.send(JSON.stringify({
-          //   type: "user_audio_chunk", 
-          //   user_audio_chunk: { audio: b64 }
-          // }));
+          // Debug: log the exact message format we're using
+          if (!window._loggedFormat) {
+            addLog(`📝 Back to JSON format: user_audio_chunk_event with audio_base_64`);
+            window._loggedFormat = true;
+          }
           
           // Debug the exact message we're sending
           if (!window._debuggedFirstChunk) {
@@ -448,6 +455,13 @@
           if (!window._lastAudioLog || Date.now() - window._lastAudioLog > 2000) {
             addLog(`🎧 Sending audio chunks (${b64.length} bytes base64)`);
             window._lastAudioLog = Date.now();
+            
+            // Set a timeout to check if we get any server responses
+            if (!window._responseTimeout) {
+              window._responseTimeout = setTimeout(() => {
+                addLog('⚠️ No server responses received after 10 seconds - agent might not have STT enabled');
+              }, 10000);
+            }
           }
         };
         

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio-to-Server Test</title>
+  <style>
+    body { 
+      font-family: system-ui; 
+      margin: 2rem; 
+      max-width: 700px; 
+      line-height: 1.5;
+    }
+    button { 
+      width: 100%; 
+      padding: 1rem; 
+      margin: 0.5rem 0; 
+      background: #007bff; 
+      color: white; 
+      border: none; 
+      cursor: pointer; 
+      font-size: 1rem;
+      border-radius: 4px;
+    }
+    button:disabled { 
+      background: #ccc; 
+      cursor: not-allowed;
+    }
+    button.active {
+      background: #dc3545;
+    }
+    button:hover:not(:disabled) {
+      background: #0056b3;
+    }
+    button.active:hover {
+      background: #c82333;
+    }
+    input, select { 
+      width: 100%; 
+      padding: 0.5rem; 
+      margin: 0.5rem 0; 
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .flex { 
+      display: flex; 
+      gap: 0.5rem; 
+    }
+    .flex input { 
+      flex: 1; 
+    }
+    .flex button { 
+      width: auto; 
+      padding: 0.5rem 1rem; 
+    }
+    #log { 
+      font-family: monospace; 
+      background: #f5f5f5; 
+      padding: 1rem; 
+      height: 300px; 
+      overflow-y: auto; 
+      margin: 1rem 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      white-space: pre-wrap;
+    }
+    .info {
+      background: #e3f2fd;
+      padding: 1rem;
+      border-radius: 4px;
+      margin: 1rem 0;
+    }
+    .device-info {
+      font-size: 0.9em;
+      color: #666;
+      background: #f8f9fa;
+      padding: 0.5rem;
+      border-radius: 4px;
+      margin: 1rem 0;
+    }
+    .audio-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .stat {
+      background: #f8f9fa;
+      padding: 0.5rem;
+      border-radius: 4px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 1.2em;
+      font-weight: bold;
+      color: #007bff;
+    }
+    .stat-label {
+      font-size: 0.8em;
+      color: #666;
+    }
+    .api-section {
+      border: 1px solid #ddd;
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+    .api-section h3 {
+      margin-top: 0;
+      color: #333;
+    }
+
+  </style>
+</head>
+<body>
+  <nav style="margin-bottom: 1rem;">
+    <a href="../" style="color: #007bff; text-decoration: none; font-size: 0.9rem;">&larr; Comedy Colliders</a>
+  </nav>
+  <h1>Audio-to-Server Test</h1>
+  
+  <div class="info">
+  <strong>Purpose:</strong> Capture audio and send to our server via HTTP POST:
+  <br>• Microphone → AudioWorklet → HTTP POST to server (fire-and-forget)
+  <br>• Server processes audio chunks as they arrive
+  </div>
+
+  <div class="device-info" id="deviceInfo">
+    Loading device information...
+  </div>
+
+
+
+
+
+  <div class="audio-stats">
+    <div class="stat">
+      <div class="stat-value" id="chunksReceived">0</div>
+      <div class="stat-label">Audio Chunks</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="totalBytes">0</div>
+      <div class="stat-label">Bytes Captured</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="sampleRate">-</div>
+      <div class="stat-label">Sample Rate</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="audioLevel">0%</div>
+      <div class="stat-label">Audio Level</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="serverResponses">0</div>
+      <div class="stat-label">Successful Sends</div>
+    </div>
+  </div>
+
+  <div id="log"></div>
+
+  <button id="startCapture">🎤 Start Audio Capture</button>
+  <button id="stopCapture" disabled>⏹️ Stop Capture</button>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const log = $('log');
+    let audioCtx = null;
+    let stream = null;
+    let worklet = null;
+    let isCapturing = false;
+    let stats = {
+      chunks: 0,
+      bytes: 0,
+      lastLevel: 0,
+      serverResponses: 0
+    };
+    let sessionId = null;
+
+    function addLog(msg) {
+      const lines = log.textContent.split('\\n').filter(Boolean);
+      const timestamp = new Date().toLocaleTimeString();
+      lines.push(`[${timestamp}] ${msg}`);
+      if (lines.length > 100) lines.splice(0, lines.length - 100);
+      log.textContent = lines.join('\\n');
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function updateStats() {
+      $('chunksReceived').textContent = stats.chunks;
+      $('totalBytes').textContent = (stats.bytes / 1024).toFixed(1) + 'KB';
+      $('sampleRate').textContent = audioCtx ? audioCtx.sampleRate + 'Hz' : '-';
+      $('audioLevel').textContent = Math.round(stats.lastLevel * 100) + '%';
+      $('serverResponses').textContent = stats.serverResponses;
+    }
+
+    function detectDevice() {
+      const ua = navigator.userAgent;
+      const isIOS = /iPad|iPhone|iPod/.test(ua);
+      const isMacOS = /Mac OS X/.test(ua) && !isIOS;
+      const isSafari = /Safari/.test(ua) && !/Chrome/.test(ua);
+      
+      let info = `Device: ${isIOS ? 'iOS' : isMacOS ? 'macOS' : 'Other'}\\n`;
+      info += `Browser: ${isSafari ? 'Safari' : 'Chrome/Other'}\\n`;
+      info += `getUserMedia: ${navigator.mediaDevices?.getUserMedia ? '✓' : '✗'}\\n`;
+      info += `AudioContext: ${window.AudioContext ? '✓' : '✗'} webkitAudioContext: ${window.webkitAudioContext ? '✓' : '✗'}\\n`;
+      // Check AudioWorklet support properly
+      let audioWorkletSupported = false;
+      try {
+        const testCtx = new (AudioContext || webkitAudioContext)();
+        audioWorkletSupported = !!testCtx.audioWorklet;
+        testCtx.close();
+      } catch (e) {
+        audioWorkletSupported = false;
+      }
+      info += `AudioWorklet: ${audioWorkletSupported ? '✓' : '✗'}`;
+      
+      $('deviceInfo').textContent = info;
+      addLog(`Device: ${isIOS ? 'iOS' : isMacOS ? 'macOS' : 'Other'}`);
+    }
+
+    function updateButtons() {
+      $('startCapture').disabled = isCapturing;
+      $('stopCapture').disabled = !isCapturing;
+    }
+
+    async function startSession() {
+      // Generate a simple session ID for tracking
+      sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      addLog(`✓ Session started: ${sessionId}`);
+      return true;
+    }
+
+    async function sendAudioChunk(audioData) {
+      if (!sessionId || !isCapturing) {
+        addLog(`⚠️ Rejected audio chunk - sessionId: ${!!sessionId}, isCapturing: ${isCapturing}`);
+        return;
+      }
+
+      try {
+        // Convert ArrayBuffer to base64 for JSON transmission
+        const view = new Uint8Array(audioData);
+        let bin = "";
+        for (let i = 0; i < view.length; i++) {
+          bin += String.fromCharCode(view[i]);
+        }
+        const b64 = btoa(bin);
+
+        // POST to current page with audio data (fire-and-forget)
+        const url = './';
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            action: 'audio_data',
+            sessionId: sessionId,
+            audioData: b64,
+            timestamp: Date.now()
+          })
+        });
+
+        // Just check for 200 OK - fire and forget
+        if (response.ok) {
+          stats.serverResponses++;
+          updateStats();
+          
+          // Log success only occasionally to avoid spam
+          if (stats.serverResponses <= 5 || stats.serverResponses % 50 === 0) {
+            addLog(`✓ Audio chunk sent successfully (#${stats.serverResponses})`);
+          }
+        } else {
+          addLog(`❌ HTTP ${response.status}: Failed to send audio chunk`);
+        }
+        
+      } catch (error) {
+        // Don't spam errors for network issues
+        if (!window._lastNetworkError || Date.now() - window._lastNetworkError > 5000) {
+          addLog(`❌ Network error: ${error.message}`);
+          window._lastNetworkError = Date.now();
+        }
+      }
+    }
+
+    async function endSession() {
+      if (!sessionId) return;
+      addLog(`✓ Session ended: ${sessionId}`);
+      sessionId = null;
+    }
+
+    async function startAudioCapture() {
+      try {
+        addLog('🚀 Starting server-based audio capture...');
+        
+        // Start server session first
+        if (!(await startSession())) {
+          return;
+        }
+        
+        // Create AudioContext
+        audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 16000 });
+        addLog(`🎧 AudioContext created (sampleRate: ${audioCtx.sampleRate}Hz, state: ${audioCtx.state})`);
+        
+        // Resume if suspended (iOS requirement)
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+          addLog(`🔄 AudioContext resumed, new state: ${audioCtx.state}`);
+        }
+        
+        // Request microphone access
+        addLog('🎤 Requesting microphone access...');
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true
+          }
+        });
+        
+        // Debug stream info
+        const audioTracks = stream.getAudioTracks();
+        addLog(`✓ Got ${audioTracks.length} audio track(s)`);
+        
+        audioTracks.forEach((track, i) => {
+          const settings = track.getSettings();
+          addLog(`Track ${i}: ${track.label} (${track.readyState})`);
+          addLog(`  Settings: ${settings.sampleRate}Hz, ${settings.channelCount}ch`);
+        });
+        
+        // Create media stream source
+        const source = audioCtx.createMediaStreamSource(stream);
+        addLog('🔊 Audio source created');
+        
+        // Load audio worklet
+        try {
+          await audioCtx.audioWorklet.addModule('pcm-worklet.js');
+          addLog('✓ Audio worklet loaded');
+        } catch (e) {
+          addLog(`❌ Failed to load audio worklet: ${e.message}`);
+          throw e;
+        }
+        
+        // Create worklet node
+        worklet = new AudioWorkletNode(audioCtx, 'pcm-encoder');
+        addLog('💾 AudioWorkletNode created');
+        
+        // Handle audio data from worklet
+        worklet.port.onmessage = ({ data }) => {
+          // Only process if we're still capturing
+          if (!isCapturing) {
+            addLog(`⚠️ Worklet sent data after stop - ignoring`);
+            return;
+          }
+          
+          stats.chunks++;
+          stats.bytes += data.byteLength;
+          
+          // Calculate audio level (RMS)
+          const view = new Int16Array(data);
+          let sum = 0;
+          for (let i = 0; i < view.length; i++) {
+            sum += view[i] * view[i];
+          }
+          stats.lastLevel = Math.sqrt(sum / view.length) / 32767;
+          
+          // Send to server
+          sendAudioChunk(data);
+          
+          // Update stats display
+          updateStats();
+          
+          // Log first few chunks and then periodically
+          if (stats.chunks <= 5 || stats.chunks % 50 === 0) {
+            addLog(`📊 Audio chunk #${stats.chunks}: ${data.byteLength} bytes, level: ${Math.round(stats.lastLevel * 100)}%`);
+          }
+        };
+        
+        // Connect audio pipeline
+        source.connect(worklet);
+        addLog('🔗 Audio pipeline connected: Mic → Worklet → Server');
+        
+        // Test connection after a delay
+        setTimeout(() => {
+          if (stats.chunks === 0) {
+            addLog('⚠️ WARNING: No audio data received - check microphone permissions!');
+          } else {
+            addLog(`✅ Audio capture working! Sent ${stats.chunks} chunks to server`);
+          }
+        }, 3000);
+        
+        isCapturing = true;
+        updateButtons();
+        addLog('🎤 Server-based audio capture active');
+        
+      } catch (error) {
+        addLog(`❌ Audio capture failed: ${error.message}`);
+        console.error('Audio capture error:', error);
+        cleanup();
+      }
+    }
+
+    function stopAudioCapture() {
+      addLog('⏹️ Stopping audio capture...');
+      addLog(`🔍 Pre-cleanup state: isCapturing=${isCapturing}, sessionId=${sessionId}`);
+      cleanup();
+      addLog(`🔍 Post-cleanup state: isCapturing=${isCapturing}, sessionId=${sessionId}`);
+      addLog(`✓ Capture stopped. Sent ${stats.chunks} chunks (${(stats.bytes / 1024).toFixed(1)}KB) to server`);
+    }
+
+    function cleanup() {
+      // Set capturing to false immediately to stop processing new audio
+      isCapturing = false;
+      
+      if (worklet) {
+        // Send stop message to worklet first
+        try {
+          worklet.port.postMessage({ action: 'stop' });
+          addLog('🛭 Stop signal sent to AudioWorklet');
+        } catch (e) {
+          addLog(`❌ Error sending stop signal: ${e.message}`);
+        }
+        
+        // Small delay to let the worklet process the stop message
+        setTimeout(() => {
+          if (worklet) {
+            // Clear the message handler
+            worklet.port.onmessage = null;
+            // Disconnect the worklet node
+            worklet.disconnect();
+            worklet = null;
+            addLog('🔌 AudioWorklet disconnected');
+          }
+        }, 100);
+      }
+      
+      if (stream) {
+        stream.getTracks().forEach(track => {
+          track.stop();
+          addLog(`🛑 Stopped track: ${track.label}`);
+        });
+        stream = null;
+      }
+      
+      if (audioCtx && audioCtx.state !== 'closed') {
+        audioCtx.close().then(() => {
+          addLog('🔌 AudioContext closed');
+        }).catch(err => {
+          addLog(`❌ Error closing AudioContext: ${err.message}`);
+        });
+        audioCtx = null;
+      }
+      
+      // End server session
+      endSession();
+      
+      updateButtons();
+      addLog('🔌 Audio pipeline fully disconnected');
+    }
+
+    // Event listeners
+    $('startCapture').onclick = startAudioCapture;
+    $('stopCapture').onclick = stopAudioCapture;
+
+    // No client-side credential management needed
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      addLog('Audio-to-Server Test initialized');
+      detectDevice();
+      updateStats();
+      
+      // Server manages all credentials
+      
+      // iOS audio unlock
+      document.addEventListener('touchstart', () => {
+        addLog('📱 Touch detected - audio unlocked for iOS');
+      }, { once: true });
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', cleanup);
+  </script>
+</body>
+</html>
