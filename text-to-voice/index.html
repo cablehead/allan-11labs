@@ -77,14 +77,27 @@
 
     async function playAudio(audioData, ctx) {
       try {
+        addLog(`🎵 Attempting to decode ${audioData.byteLength} bytes of audio data`);
         const buffer = await ctx.decodeAudioData(audioData);
+        addLog(`✓ Decoded: ${buffer.duration.toFixed(2)}s, ${buffer.sampleRate}Hz, ${buffer.numberOfChannels} channels`);
+        
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(ctx.destination);
-        source.start(Math.max(ctx.currentTime, audioTime));
-        audioTime = Math.max(ctx.currentTime, audioTime) + buffer.duration;
+        
+        const startTime = Math.max(ctx.currentTime, audioTime);
+        source.start(startTime);
+        audioTime = startTime + buffer.duration;
+        
+        addLog(`🎶 Started playback at ${startTime.toFixed(2)}s, next at ${audioTime.toFixed(2)}s`);
+        
+        source.onended = () => {
+          addLog('✅ Audio chunk playback completed');
+        };
+        
       } catch (e) {
-        addLog('Audio error: ' + e.message);
+        addLog(`❌ Audio decode/play error: ${e.message}`);
+        console.error('Full audio error:', e, 'Data length:', audioData ? audioData.byteLength : 'null');
       }
     }
 
@@ -111,6 +124,11 @@
       updateButton();
     };
 
+    // Add iOS-specific AudioContext unlock
+    document.addEventListener('touchstart', () => {
+      // This will help unlock AudioContext on iOS
+    }, { once: true });
+
     start.onclick = () => {
       start.disabled = true;
       audioTime = 0;
@@ -118,6 +136,17 @@
 
       const ws = new WebSocket(`wss://api.elevenlabs.io/v1/text-to-speech/${voice.value}/stream-input?model_id=eleven_flash_v2_5`);
       const ctx = new (AudioContext || webkitAudioContext)();
+      
+      addLog(`🎤 AudioContext created, state: ${ctx.state}`);
+      
+      // Try to resume AudioContext if suspended (iOS requirement)
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(() => {
+          addLog(`🔄 AudioContext resumed, new state: ${ctx.state}`);
+        }).catch(e => {
+          addLog(`❌ Failed to resume AudioContext: ${e.message}`);
+        });
+      }
 
       ws.onopen = () => {
         addLog('🔗 Connected to ElevenLabs');
@@ -132,9 +161,16 @@
       ws.onmessage = async ({ data }) => {
         const msg = JSON.parse(data);
         if (msg.audio) {
-          const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
-          await playAudio(bytes.buffer, ctx);
-          addLog('▶️ Playing audio chunk');
+          try {
+            addLog(`📦 Received audio chunk: ${msg.audio.length} base64 chars`);
+            const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
+            addLog(`🔢 Decoded to ${bytes.length} bytes`);
+            await playAudio(bytes.buffer, ctx);
+            addLog('▶️ Playing audio chunk');
+          } catch (audioError) {
+            addLog(`❌ Audio processing error: ${audioError.message}`);
+            console.error('Audio processing error:', audioError, 'Base64 length:', msg.audio.length);
+          }
         }
         if (msg.isFinal) {
           addLog('✅ Generation complete!');
