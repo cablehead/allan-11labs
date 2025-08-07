@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice-to-Text Test</title>
+  <style>
+    body { 
+      font-family: system-ui; 
+      margin: 2rem; 
+      max-width: 700px; 
+      line-height: 1.5;
+    }
+    input, select, button { 
+      width: 100%; 
+      padding: 0.5rem; 
+      margin: 0.5rem 0; 
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .flex { 
+      display: flex; 
+      gap: 0.5rem; 
+    }
+    .flex input { 
+      flex: 1; 
+    }
+    .flex button { 
+      width: auto; 
+      padding: 0.5rem 1rem; 
+    }
+    button { 
+      background: #007bff; 
+      color: white; 
+      border: none; 
+      cursor: pointer; 
+      font-size: 1rem;
+    }
+    button:disabled { 
+      background: #ccc; 
+      cursor: not-allowed;
+    }
+    button:hover:not(:disabled) {
+      background: #0056b3;
+    }
+    #micButton { 
+      background: #28a745; 
+      font-size: 1.2em; 
+      padding: 1rem; 
+      margin: 1rem 0; 
+      user-select: none;
+    }
+    #micButton.active { 
+      background: #dc3545; 
+    }
+    #micButton:hover:not(:disabled) { 
+      background: #218838; 
+    }
+    #micButton.active:hover { 
+      background: #c82333; 
+    }
+    #log { 
+      font-family: monospace; 
+      background: #f5f5f5; 
+      padding: 1rem; 
+      height: 300px; 
+      overflow-y: auto; 
+      margin: 1rem 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      white-space: pre-wrap;
+    }
+    .info {
+      background: #e3f2fd;
+      padding: 1rem;
+      border-radius: 4px;
+      margin: 1rem 0;
+    }
+    .api-section {
+      border: 1px solid #ddd;
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+    .api-section h3 {
+      margin-top: 0;
+      color: #333;
+    }
+    .transcription-box {
+      background: white;
+      border: 2px solid #007bff;
+      border-radius: 8px;
+      padding: 1rem;
+      margin: 1rem 0;
+      min-height: 100px;
+      font-size: 1.1em;
+      line-height: 1.6;
+    }
+    .transcription-box.empty {
+      color: #999;
+      border-color: #ddd;
+      font-style: italic;
+    }
+    .user-speech {
+      color: #0066cc;
+      font-weight: bold;
+    }
+    .system-msg {
+      color: #666;
+    }
+    .connection-status {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.8em;
+      margin-left: 1rem;
+    }
+    .status-disconnected {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    .status-connected {
+      background: #d4edda;
+      color: #155724;
+    }
+    .status-connecting {
+      background: #fff3cd;
+      color: #856404;
+    }
+  </style>
+</head>
+<body>
+  <nav style="margin-bottom: 1rem;">
+    <a href="../" style="color: #007bff; text-decoration: none; font-size: 0.9rem;">&larr; Comedy Colliders</a>
+  </nav>
+  <h1>Voice-to-Text Test <span id="connectionStatus" class="connection-status status-disconnected">Disconnected</span></h1>
+  
+  <div class="info">
+    <strong>Purpose:</strong> Test speech-to-text using ElevenLabs agentic API in isolation:
+    <br>• Connect to ElevenLabs WebSocket (no agent response)
+    <br>• Capture audio → send to API → receive transcription
+    <br>• Test conversation break detection and VAD (Voice Activity Detection)
+  </div>
+
+  <div class="api-section">
+    <h3>ElevenLabs Configuration</h3>
+    <label>API Key:</label>
+    <div class="flex">
+      <input type="password" id="apiKey" placeholder="Enter ElevenLabs API key">
+      <button id="clear">Clear</button>
+    </div>
+    
+    <label>Agent ID:</label>
+    <input type="text" id="agentId" placeholder="Enter Agent ID">
+    
+    <label>Voice (optional - agent may have its own):</label>
+    <select id="voice" disabled><option>Enter API key first...</option></select>
+  </div>
+
+  <div class="transcription-box empty" id="transcriptionBox">
+    Transcribed speech will appear here...
+  </div>
+
+  <button id="micButton" disabled>🎤 Start Listening</button>
+
+  <div id="log"></div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const apiKey = $('apiKey'), voice = $('voice'), agentId = $('agentId'), micButton = $('micButton'), log = $('log');
+    const transcriptionBox = $('transcriptionBox'), connectionStatus = $('connectionStatus');
+    
+    // Global state
+    let ws = null;
+    let audioCtx = null;
+    let stream = null;
+    let worklet = null;
+    let isListening = false;
+    let conversationId = null;
+
+    function addLog(msg, className = 'system-msg') {
+      const lines = log.innerHTML.split('<br>').filter(Boolean);
+      const timestamp = `[${new Date().toLocaleTimeString()}]`;
+      let msgClass = className;
+      
+      if (msg.startsWith('USER:')) {
+        msgClass = 'user-speech';
+      }
+      
+      lines.push(`<span class="${msgClass}">${timestamp} ${msg}</span>`);
+      if (lines.length > 100) lines.splice(0, lines.length - 100);
+      log.innerHTML = lines.join('<br>');
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function updateConnectionStatus(status) {
+      connectionStatus.className = `connection-status status-${status}`;
+      connectionStatus.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    function updateButtons() {
+      const hasConfig = apiKey.value && agentId.value; // Don't require voice - agent has its own
+      const isConnected = ws && ws.readyState === WebSocket.OPEN;
+      
+      micButton.disabled = !hasConfig;
+    }
+
+    async function loadVoices() {
+      try {
+        voice.innerHTML = '<option>Loading...</option>';
+        const res = await fetch('https://api.elevenlabs.io/v1/voices', {
+          headers: { 'xi-api-key': apiKey.value }
+        });
+        const data = await res.json();
+        
+        voice.innerHTML = '<option value="">Select voice...</option>';
+        data.voices.forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v.voice_id;
+          opt.textContent = v.name;
+          voice.appendChild(opt);
+        });
+        voice.disabled = false;
+        addLog(`✓ Loaded ${data.voices.length} voices`);
+      } catch (e) {
+        voice.innerHTML = '<option>Error loading</option>';
+        addLog(`✗ Error loading voices: ${e.message}`);
+      }
+      updateButtons();
+    }
+
+    function openWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      
+      updateConnectionStatus('connecting');
+      addLog('🔗 Connecting to ElevenLabs WebSocket...');
+      
+      const url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${agentId.value}`;
+      ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+      
+      ws.onopen = async () => {
+        updateConnectionStatus('connected');
+        addLog('✓ WebSocket connected');
+        
+        // Create AudioContext for capture
+        audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 16000 });
+        addLog(`🎧 AudioContext created (sampleRate: ${audioCtx.sampleRate}Hz, state: ${audioCtx.state})`);
+        
+        // Resume if suspended (iOS requirement)
+        if (audioCtx.state === 'suspended') {
+          try {
+            await audioCtx.resume();
+            addLog(`🔄 AudioContext resumed, new state: ${audioCtx.state}`);
+          } catch (e) {
+            addLog(`⚠️ AudioContext resume failed: ${e.message}`);
+          }
+        }
+        
+        // Send initialization packet (required for ElevenLabs API)
+        sendInitPacket();
+        updateButtons();
+      };
+      
+      ws.onmessage = handleServerEvent;
+      
+      ws.onclose = () => {
+        updateConnectionStatus('disconnected');
+        addLog('🔌 WebSocket connection closed');
+        cleanup();
+        updateButtons();
+      };
+      
+      ws.onerror = () => {
+        updateConnectionStatus('disconnected');
+        addLog('❌ WebSocket connection error');
+      };
+    }
+
+    function sendInitPacket() {
+      const init = {
+        type: "conversation_initiation_client_data",
+        conversation_initiation_client_data: {
+          client_supplied_trace_id: crypto.randomUUID()
+          // Don't override agent config - let it use its default voice
+          // agent: { voice_id: voice.value },
+          // llm: { provider: "custom" },
+          // text_to_speech: { model_id: "eleven_flash_v2_5" }
+        }
+      };
+      ws.send(JSON.stringify(init));
+      addLog("🪄 Session initialization sent (using agent defaults)");
+    }
+
+    async function handleServerEvent({ data }) {
+      const msg = JSON.parse(data);
+      
+      // Debug logging (skip ping and frequent VAD events)
+      if (msg.type !== "ping" && msg.type !== "vad_score") {
+        console.debug("📨 Received:", msg.type, msg);
+      }
+
+      switch (msg.type) {
+        case "ping":
+          // Respond to ping to keep connection alive
+          ws.send(JSON.stringify({ type: "pong", event_id: msg.ping_event.event_id }));
+          break;
+
+        case "vad_score":
+          // Voice Activity Detection score
+          const vadScore = msg.vad_score_event.vad_score;
+          if (vadScore > 0.6 && (!window._lastVadLog || Date.now() - window._lastVadLog > 2000)) {
+            addLog(`🎯 Voice activity detected (score: ${vadScore.toFixed(2)})`);
+            window._lastVadLog = Date.now();
+          }
+          break;
+
+        case "user_transcript":
+          // This is what we're testing! Speech-to-text result
+          const transcript = msg.user_transcript.text;
+          addLog(`USER: ${transcript}`);
+          
+          // Display in transcription box
+          if (transcriptionBox.classList.contains('empty')) {
+            transcriptionBox.classList.remove('empty');
+            transcriptionBox.textContent = '';
+          }
+          transcriptionBox.textContent += transcript + ' ';
+          
+          // Note: We're NOT sending this to an LLM - we just want the transcription
+          break;
+
+        case "audio":
+          // We might receive audio back, but we don't want to play it for this test
+          addLog(`🔊 Received audio chunk (ignoring for this test)`);
+          break;
+
+        case "conversation_initiation_client_data_response":
+          addLog("✓ Conversation initialization acknowledged");
+          break;
+
+        case "conversation_initiation_metadata":
+          conversationId = msg.conversation_initiation_metadata_event.conversation_id;
+          addLog(`✓ Conversation metadata received (ID: ${conversationId.slice(-8)})`);
+          break;
+
+        default:
+          console.warn("Unknown event:", msg.type, msg);
+          addLog(`❓ Unknown event: ${msg.type}`);
+      }
+    }
+
+    async function startListening() {
+      try {
+        addLog('🎤 Starting voice capture...');
+        
+        // Request microphone access
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true
+          }
+        });
+        
+        const audioTracks = stream.getAudioTracks();
+        addLog(`✓ Got ${audioTracks.length} audio track(s)`);
+        
+        // Create audio processing pipeline
+        const source = audioCtx.createMediaStreamSource(stream);
+        
+        // Load and create worklet
+        await audioCtx.audioWorklet.addModule('pcm-worklet.js');
+        worklet = new AudioWorkletNode(audioCtx, 'pcm-encoder');
+        
+        // Handle audio data from worklet
+        worklet.port.onmessage = ({ data }) => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return;
+          }
+
+          // Convert audio data to base64 for ElevenLabs API
+          let b64;
+          if (typeof data === "string") {
+            b64 = data;
+          } else {
+            const view = new Uint8Array(data);
+            let bin = "";
+            for (let i = 0; i < view.length; i++) bin += String.fromCharCode(view[i]);
+            b64 = btoa(bin);
+          }
+
+          // Send audio chunk to ElevenLabs
+          ws.send(JSON.stringify({
+            type: "user_audio_chunk",
+            user_audio_chunk: { 
+              audio: b64, 
+              timestamp: Date.now() 
+            }
+          }));
+
+          // Occasional logging
+          if (!window._lastAudioLog || Date.now() - window._lastAudioLog > 2000) {
+            addLog(`🎧 Sending audio chunks (${b64.length} bytes base64)`);
+            window._lastAudioLog = Date.now();
+          }
+        };
+        
+        // Connect audio pipeline
+        source.connect(worklet);
+        addLog('🔗 Audio pipeline connected: Mic → Worklet → WebSocket');
+        
+        isListening = true;
+        micButton.classList.add('active');
+        micButton.textContent = "🔴 Stop Listening";
+        
+      } catch (error) {
+        addLog(`❌ Failed to start listening: ${error.message}`);
+        console.error('Start listening error:', error);
+      }
+    }
+
+    function stopListening() {
+      addLog('⏹️ Stopping voice capture...');
+      
+      if (worklet) {
+        worklet.port.onmessage = null;
+        worklet.disconnect();
+        worklet = null;
+      }
+      
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      
+      isListening = false;
+      micButton.classList.remove('active');
+      micButton.textContent = "🎤 Start Listening";
+      
+      addLog('🛑 Voice capture stopped');
+    }
+
+    function cleanup() {
+      if (isListening) {
+        stopListening();
+      }
+      
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      
+      conversationId = null;
+    }
+
+    // Event listeners
+    apiKey.oninput = () => {
+      if (apiKey.value.length > 20) {
+        localStorage.elevenlabs_key = apiKey.value;
+        addLog(`🔑 API key entered (${apiKey.value.slice(0,4)}...${apiKey.value.slice(-4)})`);
+        loadVoices();
+      } else {
+        voice.innerHTML = '<option>Enter API key first...</option>';
+        voice.disabled = true;
+        updateButtons();
+      }
+    };
+
+    voice.onchange = agentId.oninput = updateButtons;
+
+    $('clear').onclick = () => {
+      delete localStorage.elevenlabs_key;
+      apiKey.value = '';
+      voice.innerHTML = '<option>Enter API key first...</option>';
+      voice.disabled = true;
+      addLog('🗑️ API key cleared');
+      updateButtons();
+    };
+
+    micButton.onclick = () => {
+      if (!isListening) {
+        // Start listening
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          openWebSocket();
+          // Wait a moment for connection to establish
+          setTimeout(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              startListening();
+            } else {
+              addLog("❌ Connection not ready - try again");
+            }
+          }, 1000);
+        } else {
+          startListening();
+        }
+      } else {
+        // Stop listening
+        stopListening();
+      }
+    };
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      addLog('Voice-to-Text Test initialized');
+      updateButtons();
+      
+      // Load saved API key
+      if (localStorage.elevenlabs_key) {
+        apiKey.value = localStorage.elevenlabs_key;
+        addLog(`📁 Loaded saved API key (${localStorage.elevenlabs_key.slice(0,4)}...${localStorage.elevenlabs_key.slice(-4)})`);
+        loadVoices();
+      }
+      
+      // iOS audio unlock
+      document.addEventListener('touchstart', () => {
+        addLog('📱 Touch detected - audio unlocked for iOS');
+      }, { once: true });
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', cleanup);
+  </script>
+</body>
+</html>
