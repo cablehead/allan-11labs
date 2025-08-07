@@ -2,51 +2,108 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ElevenLabs TTS</title>
+  <title>ElevenLabs Conversational AI</title>
   <style>
     body { font-family: system-ui; margin: 2rem; max-width: 600px; }
-    input, select, textarea, button { width: 100%; padding: 0.5rem; margin: 0.5rem 0; }
+    input, select, button { width: 100%; padding: 0.5rem; margin: 0.5rem 0; }
     .flex { display: flex; gap: 0.5rem; }
     .flex input { flex: 1; }
     .flex button { width: auto; padding: 0.5rem 1rem; }
-    #log { font-family: monospace; background: #f5f5f5; padding: 0.5rem; height: 150px; overflow-y: auto; }
+    #log { font-family: monospace; background: #f5f5f5; padding: 0.5rem; height: 300px; overflow-y: auto; }
     button { background: #007bff; color: white; border: none; cursor: pointer; }
     button:disabled { background: #ccc; }
+    button:active { background: #0056b3; }
+    #push { 
+      background: #28a745; 
+      font-size: 1.2em; 
+      padding: 1rem; 
+      margin: 1rem 0; 
+      user-select: none;
+    }
+    #push:active { background: #1e7e34; transform: scale(0.98); }
+    #hangup { background: #dc3545; }
+    #hangup:hover { background: #c82333; }
+    .user-msg { color: #0066cc; font-weight: bold; }
+    .agent-msg { color: #cc6600; }
+    .system-msg { color: #666; }
+    .api-section { border: 1px solid #ddd; padding: 1rem; margin: 1rem 0; border-radius: 4px; }
+    .api-section h3 { margin-top: 0; }
   </style>
 </head>
 <body>
-  <h1>ElevenLabs TTS</h1>
+  <h1>ElevenLabs Conversational AI</h1>
 
-  <label>API Key:</label>
-  <div class="flex">
-    <input type="password" id="apiKey" placeholder="Enter API key">
-    <button id="clear">Clear</button>
+  <div class="api-section">
+    <h3>ElevenLabs Configuration</h3>
+    <label>API Key:</label>
+    <div class="flex">
+      <input type="password" id="apiKey" placeholder="Enter ElevenLabs API key">
+      <button id="clear">Clear</button>
+    </div>
+    
+    <label>Agent ID:</label>
+    <input type="text" id="agentId" placeholder="Enter Agent ID">
+    
+    <label>Voice:</label>
+    <select id="voice" disabled><option>Enter API key first...</option></select>
   </div>
-  
-  <label>Voice:</label>
-  <select id="voice" disabled><option>Enter API key first...</option></select>
 
-  <label>Text:</label>
-  <textarea id="text" placeholder="Enter text to convert...">Hello world! This is a test.</textarea>
+  <div class="api-section">
+    <h3>Claude Configuration</h3>
+    <label>Anthropic API Key:</label>
+    <div class="flex">
+      <input type="password" id="haikuKey" placeholder="Enter Anthropic API key">
+      <button id="clearHaiku">Clear</button>
+    </div>
+  </div>
 
-  <button id="start" disabled>Generate Speech</button>
+  <button id="push" disabled>🎤 Hold to Talk</button>
+  <button id="hangup" disabled>📞 Hang Up</button>
+
   <div id="log"></div>
 
   <script>
     const $ = id => document.getElementById(id);
-    const apiKey = $('apiKey'), voice = $('voice'), text = $('text'), start = $('start'), log = $('log');
-    let audioTime = 0;
+    const apiKey = $('apiKey'), voice = $('voice'), agentId = $('agentId');
+    const haikuKey = $('haikuKey'), push = $('push'), hangup = $('hangup'), log = $('log');
+    
+    // globals
+    let ws, audioCtx, worklet, conversationId, stream;
+    const history = [];
+    
+    const HAIKU_HEADERS = {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "Accept": "text/event-stream",
+      "anthropic-dangerous-direct-browser-access": "true"
+    };
+    const HAIKU_MODEL = "claude-3-5-haiku-latest";
 
-    function addLog(msg) {
-      const lines = log.textContent.split('\n').filter(Boolean);
-      lines.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
-      if (lines.length > 50) lines.splice(0, lines.length - 50);
-      log.textContent = lines.join('\n');
+    function addLog(msg, className = 'system-msg') {
+      const lines = log.innerHTML.split('<br>').filter(Boolean);
+      const timestamp = `[${new Date().toLocaleTimeString()}]`;
+      let msgClass = className;
+      
+      // Determine message type and styling
+      if (msg.startsWith('USER:')) {
+        msgClass = 'user-msg';
+      } else if (msg.startsWith('AGENT>')) {
+        msgClass = 'agent-msg';
+      }
+      
+      lines.push(`<span class="${msgClass}">${timestamp} ${msg}</span>`);
+      if (lines.length > 100) lines.splice(0, lines.length - 100);
+      log.innerHTML = lines.join('<br>');
       log.scrollTop = log.scrollHeight;
     }
 
-    function updateButton() {
-      start.disabled = !apiKey.value || !voice.value || !text.value.trim();
+    function updateButtons() {
+      const hasElevenLabs = apiKey.value && voice.value && agentId.value;
+      const hasHaiku = haikuKey.value;
+      const isConnected = ws && ws.readyState === WebSocket.OPEN;
+      
+      push.disabled = !(hasElevenLabs && hasHaiku);
+      hangup.disabled = !isConnected;
     }
 
     async function loadVoices() {
@@ -70,92 +127,289 @@
         voice.innerHTML = '<option>Error loading</option>';
         addLog(`✗ Error loading voices: ${e.message}`);
       }
-      updateButton();
+      updateButtons();
     }
 
-    async function playAudio(audioData, ctx) {
-      try {
-        const buffer = await ctx.decodeAudioData(audioData);
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        source.start(Math.max(ctx.currentTime, audioTime));
-        audioTime = Math.max(ctx.currentTime, audioTime) + buffer.duration;
-      } catch (e) {
-        addLog('Audio error: ' + e.message);
+    // WebSocket bootstrap
+    function openSocket(agentIdValue, apiKeyValue, voiceIdValue) {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      
+      const url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${agentIdValue}`;
+      ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+      
+      ws.onopen = () => {
+        audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 16000 });
+        sendInitPacket(apiKeyValue, voiceIdValue);
+        updateButtons();
+      };
+      
+      ws.onmessage = handleServerEvent;
+      ws.onclose = cleanupUI;
+      ws.onerror = () => addLog('❌ WebSocket connection error');
+    }
+
+    function sendInitPacket(key, voiceId) {
+      const init = {
+        type: "conversation_initiation_client_data",
+        conversation_initiation_client_data: {
+          client_supplied_trace_id: crypto.randomUUID(),
+          agent: { voice_id: voiceId },
+          llm: { provider: "custom" },
+          text_to_speech: { model_id: "eleven_flash_v2_5" }
+        }
+      };
+      ws.send(JSON.stringify(init));
+      addLog("🪄 Session started");
+    }
+
+    // Server → client events
+    async function handleServerEvent({ data }) {
+      const msg = JSON.parse(data);
+
+      switch (msg.type) {
+        case "ping":
+          ws.send(JSON.stringify({ type: "pong", event_id: msg.ping_event.event_id }));
+          break;
+
+        case "vad_score":
+          // Optional: could light up UI when msg.vad_score_event.vad_score > 0.6
+          break;
+
+        case "user_transcript":
+          addLog("USER: " + msg.user_transcript.text);
+          streamToBrain(msg.user_transcript.text);
+          break;
+
+        case "audio":
+          playAudio64(msg.audio_event.audio_base_64);
+          break;
+
+        default:
+          console.warn("unknown event", msg);
       }
     }
 
+    // SSE iterator for Anthropic streaming
+    async function* sseIterator(stream) {
+      const reader = stream.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let sep;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const block = buffer.slice(0, sep).trim();
+          buffer = buffer.slice(sep + 2);
+
+          const [, json] = block.match(/^data:\s*(.*)$/m) || [];
+          if (!json) continue;
+          yield JSON.parse(json);
+        }
+      }
+    }
+
+    // Bridge to Claude Haiku
+    async function streamToBrain(userText) {
+      history.push({ role: "user", content: userText });
+
+      const payload = {
+        model: HAIKU_MODEL,
+        stream: true,
+        max_tokens: 512,
+        messages: history
+      };
+
+      try {
+        const resp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            ...HAIKU_HEADERS,
+            "x-api-key": haikuKey.value
+          },
+          body: JSON.stringify(payload)
+        });
+
+        let buffer = "";
+        let fullResponse = "";
+        
+        for await (const evt of sseIterator(resp.body)) {
+          if (evt.type === "content_block_delta" && evt.delta.type === "text_delta") {
+            buffer += evt.delta.text;
+            fullResponse += evt.delta.text;
+
+            // Send after sentence or ~40 tokens
+            if (buffer.split(/\s+/).length > 40 || /[.!?]\s$/.test(buffer)) {
+              sendAgentResponse(buffer, false);
+              buffer = "";
+            }
+          }
+
+          if (evt.type === "message_stop") {
+            if (buffer) sendAgentResponse(buffer, true);
+            history.push({ role: "assistant", content: fullResponse });
+          }
+        }
+      } catch (e) {
+        addLog(`❌ Brain error: ${e.message}`);
+        sendAgentResponse("I'm sorry, I encountered an error processing your request.", true);
+      }
+    }
+
+    function sendAgentResponse(text, isFinal) {
+      ws.send(JSON.stringify({
+        type: "agent_response",
+        agent_response_event: {
+          agent_response: text,
+          is_final: isFinal ?? false
+        }
+      }));
+      addLog("AGENT> " + text);
+    }
+
+    // Microphone capture
+    async function startCapture() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const source = audioCtx.createMediaStreamSource(stream);
+        await audioCtx.audioWorklet.addModule("pcm-worklet.js");
+        worklet = new AudioWorkletNode(audioCtx, "pcm-encoder");
+        
+        worklet.port.onmessage = ({ data }) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: "user_audio_chunk",
+              user_audio_chunk: { audio: data, timestamp: Date.now() }
+            }));
+          }
+        };
+        
+        source.connect(worklet).connect(audioCtx.destination);
+        addLog("🎤 Microphone active");
+      } catch (e) {
+        addLog(`❌ Microphone error: ${e.message}`);
+      }
+    }
+
+    // Audio playback
+    function playAudio64(b64) {
+      try {
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        audioCtx.decodeAudioData(bytes.buffer).then(buf => {
+          const src = audioCtx.createBufferSource();
+          src.buffer = buf;
+          src.connect(audioCtx.destination);
+          src.start();
+        });
+      } catch (e) {
+        addLog(`❌ Audio playback error: ${e.message}`);
+      }
+    }
+
+    function cleanupUI() {
+      if (worklet) {
+        worklet.disconnect();
+        worklet = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      updateButtons();
+      addLog("🔌 Connection closed");
+    }
+
+    // Event listeners
     apiKey.oninput = () => {
       if (apiKey.value.length > 20) {
         localStorage.elevenlabs_key = apiKey.value;
-        addLog(`🔑 API key entered (${apiKey.value.slice(0,4)}...${apiKey.value.slice(-4)})`);
+        addLog(`🔑 ElevenLabs API key entered`);
         loadVoices();
       } else {
         voice.innerHTML = '<option>Enter API key first...</option>';
         voice.disabled = true;
-        updateButton();
+        updateButtons();
       }
     };
 
-    voice.onchange = text.oninput = updateButton;
+    haikuKey.oninput = () => {
+      if (haikuKey.value.length > 20) {
+        localStorage.haiku_key = haikuKey.value;
+        addLog(`🔑 Anthropic API key entered`);
+        updateButtons();
+      } else {
+        updateButtons();
+      }
+    };
+
+    voice.onchange = agentId.oninput = updateButtons;
 
     $('clear').onclick = () => {
       delete localStorage.elevenlabs_key;
       apiKey.value = '';
       voice.innerHTML = '<option>Enter API key first...</option>';
       voice.disabled = true;
-      addLog('🗑️ API key cleared');
-      updateButton();
+      addLog('🗑️ ElevenLabs API key cleared');
+      updateButtons();
     };
 
-    start.onclick = () => {
-      start.disabled = true;
-      audioTime = 0;
-      addLog('🚀 Starting TTS generation...');
-
-      const ws = new WebSocket(`wss://api.elevenlabs.io/v1/text-to-speech/${voice.value}/stream-input?model_id=eleven_flash_v2_5`);
-      const ctx = new (AudioContext || webkitAudioContext)();
-
-      ws.onopen = () => {
-        addLog('🔗 Connected to ElevenLabs');
-        ws.send(JSON.stringify({ text: " ", xi_api_key: apiKey.value }));
-        setTimeout(() => {
-          addLog(`📝 Streaming ${text.value.length} characters`);
-          ws.send(JSON.stringify({ text: text.value }));
-        }, 500);
-        setTimeout(() => ws.send(JSON.stringify({ text: "" })), 1000);
-      };
-
-      ws.onmessage = async ({ data }) => {
-        const msg = JSON.parse(data);
-        if (msg.audio) {
-          const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
-          await playAudio(bytes.buffer, ctx);
-          addLog('▶️ Playing audio chunk');
-        }
-        if (msg.isFinal) {
-          addLog('✅ Generation complete!');
-          ws.close();
-        }
-        if (msg.error) {
-          addLog(`❌ Server error: ${msg.error}`);
-        }
-      };
-
-      ws.onclose = () => {
-        start.disabled = false;
-        addLog('🔌 Connection closed');
-      };
-      ws.onerror = () => addLog('❌ WebSocket connection error');
+    $('clearHaiku').onclick = () => {
+      delete localStorage.haiku_key;
+      haikuKey.value = '';
+      addLog('🗑️ Anthropic API key cleared');
+      updateButtons();
     };
 
-    // Load saved key
+    // Push-to-talk UI
+    push.onpointerdown = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        openSocket(agentId.value, apiKey.value, voice.value);
+        // Wait a bit for connection before starting capture
+        setTimeout(startCapture, 500);
+      } else {
+        startCapture();
+      }
+    };
+
+    push.onpointerup = () => {
+      if (worklet) {
+        worklet.disconnect();
+        worklet = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      addLog("🎤 Microphone released");
+    };
+
+    hangup.onclick = () => {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      cleanupUI();
+      history.length = 0; // Clear conversation history
+      addLog("📞 Call ended");
+    };
+
+    // Load saved keys
     if (localStorage.elevenlabs_key) {
       apiKey.value = localStorage.elevenlabs_key;
-      addLog(`📁 Loaded saved API key (${localStorage.elevenlabs_key.slice(0,4)}...${localStorage.elevenlabs_key.slice(-4)})`);
+      addLog(`📁 Loaded saved ElevenLabs API key`);
       loadVoices();
     }
+
+    if (localStorage.haiku_key) {
+      haikuKey.value = localStorage.haiku_key;
+      addLog(`📁 Loaded saved Anthropic API key`);
+    }
+
+    updateButtons();
   </script>
 </body>
 </html>
