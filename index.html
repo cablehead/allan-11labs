@@ -13,7 +13,10 @@
   <h1>Live ElevenLabs TTS</h1>
 
   <label>API Key:
-    <input type="password" id="apiKey" style="width: 100%;" placeholder="Paste your API key" />
+    <div style="display: flex; gap: 5px; align-items: center;">
+      <input type="password" id="apiKey" style="flex: 1;" placeholder="Paste your API key" />
+      <button id="clearApiKey" style="padding: 5px 10px; font-size: 12px;" title="Clear saved API key">Clear</button>
+    </div>
   </label>
   <label>Voice ID:
     <select id="voiceId" style="width: 100%;" disabled>
@@ -71,9 +74,35 @@
       }
     }
 
+    // Load saved API key on page load
+    function loadSavedApiKey() {
+      const savedApiKey = localStorage.getItem('elevenlabs_api_key');
+      if (savedApiKey) {
+        log(`📁 Loaded saved API key: ${savedApiKey.substring(0, 8)}... (${savedApiKey.length} chars)`);
+        document.getElementById('apiKey').value = savedApiKey;
+        if (savedApiKey.length > 20) {
+          loadVoices(savedApiKey);
+        }
+      } else {
+        log('📁 No saved API key found in localStorage');
+      }
+    }
+
+    // Save API key to localStorage
+    function saveApiKey(apiKey) {
+      if (apiKey && apiKey.length > 20) {
+        localStorage.setItem('elevenlabs_api_key', apiKey);
+        log('API key saved for future sessions.');
+      } else {
+        localStorage.removeItem('elevenlabs_api_key');
+      }
+    }
+
     // Load voices when API key is entered
     document.getElementById('apiKey').addEventListener('input', (e) => {
       const apiKey = e.target.value.trim();
+      saveApiKey(apiKey); // Save to localStorage
+      
       if (apiKey.length > 20) { // Basic check for API key format
         loadVoices(apiKey);
       } else {
@@ -83,37 +112,47 @@
       }
     });
 
+    // Clear API key button
+    document.getElementById('clearApiKey').addEventListener('click', () => {
+      localStorage.removeItem('elevenlabs_api_key');
+      document.getElementById('apiKey').value = '';
+      const voiceSelect = document.getElementById('voiceId');
+      voiceSelect.innerHTML = '<option value="">Enter API key first to load voices...</option>';
+      voiceSelect.disabled = true;
+      log('API key cleared from storage.');
+    });
+
+    // Load saved API key when page loads
+    window.addEventListener('load', loadSavedApiKey);
+
     document.getElementById('startBtn').onclick = () => {
       const apiKey = document.getElementById('apiKey').value.trim();
       const voiceId = document.getElementById('voiceId').value.trim();
       const modelId = 'eleven_flash_v2_5'; // Hardcoded for optimal streaming performance
+      
+      // Debug logging for API key
+      log(`🔑 Full API Key: "${apiKey}"`);
+      log(`🔑 API Key length: ${apiKey.length}`);
+      log(`🎤 Voice ID: ${voiceId}`);
+      log(`🤖 Model: ${modelId}`);
+      
       if (!apiKey || !voiceId) {
         log('ERROR: API Key and Voice ID selection are required.');
         return;
       }
 
-      const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream-input?model_id=${encodeURIComponent(modelId)}&optimize_streaming_latency=3`;
+      const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream-input?model_id=${encodeURIComponent(modelId)}&optimize_streaming_latency=3&output_format=mp3_22050_32`;
+      
+      // WebSocket doesn't support custom headers in browser, so we'll include API key in first message
       const ws = new WebSocket(wsUrl);
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       let bufferQueue = Promise.resolve();
       let currentTime = 0;
 
       ws.onopen = () => {
-        log('WebSocket open.');
-        // Send initial BOS (Begin of Stream) message
-        ws.send(JSON.stringify({
-          text: '',
-          voice_settings: { 
-            stability: 0.5, 
-            similarity_boost: 0.8,
-            style: 0.0,
-            use_speaker_boost: true
-          },
-          generation_config: {
-            chunk_length_schedule: [120, 160, 250, 290]
-          },
-          xi_api_key: apiKey
-        }));
+        log('WebSocket open. Starting streaming immediately...');
+        // Start streaming immediately - no separate BOS message needed
+        streamText(ws);
       };
 
       ws.onerror = (err) => log('WebSocket error: ' + (err.message || 'Unknown error'));
@@ -122,68 +161,97 @@
       ws.onmessage = async ({ data }) => {
         try {
           const msg = JSON.parse(data);
-          log(`Received message: ${JSON.stringify(msg).substring(0, 100)}...`);
+          log(`Received: ${msg.audio ? '[AUDIO_CHUNK]' : JSON.stringify(msg).substring(0, 100)}`);
           
           if (msg.audio) {
-            log('Received audio chunk.');
+            log('Processing audio chunk...');
             const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
             bufferQueue = bufferQueue.then(() => playChunk(bytes, audioCtx));
           }
           
+          // Only close on isFinal AND no more text is being sent
           if (msg.isFinal) {
-            log('Stream complete (isFinal). Closing WebSocket.');
-            ws.close();
+            log('Received isFinal - stream ending naturally.');
+            // Don't immediately close, let it finish processing
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                log('WebSocket closed after stream completion.');
+              }
+            }, 1000);
           }
           
           if (msg.error) {
-            log('Error from server: ' + msg.error);
+            log('Server error: ' + msg.error);
           }
         } catch (e) {
-          log('Error parsing message: ' + e.message);
+          log('Message parsing error: ' + e.message);
         }
       };
 
-      // Wait for connection then start streaming
-      setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          streamText(ws);
-        } else {
-          log('WebSocket not ready, waiting...');
-          ws.addEventListener('open', () => streamText(ws));
-        }
-      }, 100);
+      // Streaming will be initiated from ws.onopen after BOS message
     };
 
     async function streamText(ws) {
-      const text = "Mom, I left my lunch box at the streetcar stop, my daughter said, voice full of worry. Don't worry, I replied softly, we'll stop by the bakery and get you something warm on the way home.";
-      
-      // Send text in smaller chunks word by word
-      const words = text.split(' ');
-      let currentChunk = '';
-      
-      for (let i = 0; i < words.length; i++) {
-        currentChunk += words[i] + ' ';
-        
-        // Send chunk every 3-5 words
-        if ((i + 1) % 4 === 0 || i === words.length - 1) {
-          log(`Sending chunk: ${currentChunk.trim()}`);
-          ws.send(JSON.stringify({ 
-            text: currentChunk.trim(),
-            try_trigger_generation: true
-          }));
-          currentChunk = '';
-          await new Promise(r => setTimeout(r, 200)); // Small delay between chunks
-        }
+      if (ws.readyState !== WebSocket.OPEN) {
+        log('WebSocket not ready for streaming');
+        return;
       }
       
-      // Send EOS (End of Stream)
-      log('Sending EOS');
-      ws.send(JSON.stringify({ text: '' }));
+      const text = "Mom, I left my lunch box at the streetcar stop, my daughter said, voice full of worry. Don't worry, I replied softly, we'll stop by the bakery and get you something warm on the way home.";
+      
+      log('Starting text streaming...');
+      
+      // Send the first message with voice settings AND enough text to trigger generation (120+ chars)
+      const firstChunk = text.substring(0, 130); // Ensure we meet the 120 char threshold
+      const remainingText = text.substring(130);
+      
+      log(`Sending initial chunk (${firstChunk.length} chars): "${firstChunk}"`);
+      ws.send(JSON.stringify({
+        text: firstChunk,
+        voice_settings: { 
+          stability: 0.5, 
+          similarity_boost: 0.8,
+          style: 0.0,
+          use_speaker_boost: true
+        },
+        generation_config: {
+          chunk_length_schedule: [120, 160, 250, 290]
+        },
+        xi_api_key: apiKey,  // Include API key in first message
+        try_trigger_generation: true
+      }));
+      
+      // Wait a bit, then send remaining text in chunks
+      await new Promise(r => setTimeout(r, 1000));
+      
+      if (remainingText && ws.readyState === WebSocket.OPEN) {
+        log(`Sending remaining text (${remainingText.length} chars): "${remainingText}"`);
+        ws.send(JSON.stringify({ 
+          text: remainingText,
+          try_trigger_generation: true
+        }));
+        
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      
+      // Send EOS (End of Stream) - this tells ElevenLabs we're done
+      if (ws.readyState === WebSocket.OPEN) {
+        log('Sending EOS to finalize stream');
+        ws.send(JSON.stringify({ text: '' }));
+      }
     }
 
     async function playChunk(bytes, audioCtx) {
       try {
-        const buffer = await audioCtx.decodeAudioData(bytes.buffer);
+        // Ensure audio context is resumed (required for autoplay policy)
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+          log('Audio context resumed');
+        }
+        
+        const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        const buffer = await audioCtx.decodeAudioData(arrayBuffer);
         const src = audioCtx.createBufferSource();
         src.buffer = buffer;
         src.connect(audioCtx.destination);
@@ -193,9 +261,14 @@
         src.start(startTime);
         currentTime = startTime + buffer.duration;
         
-        log(`Playing audio chunk: ${buffer.duration.toFixed(2)}s`);
+        log(`▶️ Playing audio: ${buffer.duration.toFixed(2)}s (scheduled at ${startTime.toFixed(2)}s)`);
+        
+        // Log when audio actually starts
+        src.onended = () => log('Audio chunk finished playing');
+        
       } catch (e) {
-        log('Audio playback error: ' + e.message);
+        log('❌ Audio error: ' + e.message);
+        log('Bytes length: ' + bytes.length);
       }
     }
   </script>
