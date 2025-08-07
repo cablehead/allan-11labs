@@ -6,6 +6,9 @@
   <style>
     body { font-family: sans-serif; margin: 2rem; }
     label { display: block; margin: 0.5rem 0 0.2rem; }
+    input, select { width: 100%; }
+    .api-input { display: flex; gap: 5px; align-items: center; }
+    .api-input input { flex: 1; }
     #log { font-family: monospace; white-space: pre-wrap; background: #f0f0f0; padding: 1rem; height: 200px; overflow-y: auto; border: 1px solid #ccc; }
   </style>
 </head>
@@ -13,26 +16,26 @@
   <h1>Live ElevenLabs TTS</h1>
 
   <label>API Key:
-    <div style="display: flex; gap: 5px; align-items: center;">
-      <input type="password" id="apiKey" style="flex: 1;" placeholder="Paste your API key" />
-      <button id="clearApiKey" style="padding: 5px 10px; font-size: 12px;" title="Clear saved API key">Clear</button>
+    <div class="api-input">
+      <input type="password" id="apiKey" placeholder="Paste your API key" />
+      <button id="clearApiKey" title="Clear saved API key">Clear</button>
     </div>
   </label>
-  <label>Voice ID:
-    <select id="voiceId" style="width: 100%;" disabled>
+  
+  <label>Voice:
+    <select id="voiceId" disabled>
       <option value="">Enter API key first to load voices...</option>
     </select>
   </label>
 
   <button id="startBtn">Start Streaming</button>
-
-  <div id="status"></div>
-  <audio id="audio" autoplay></audio>
-
-  <h2>Error Log (last 100 entries)</h2>
   <div id="log"></div>
 
   <script>
+    // State
+    let currentTimeRef = { value: 0 };
+    
+    // Logging
     const logDiv = document.getElementById('log');
     function log(msg) {
       const lines = logDiv.innerText.split('\n').filter(Boolean);
@@ -42,6 +45,29 @@
       logDiv.scrollTop = logDiv.scrollHeight;
     }
 
+    // API Key Management
+    function maskApiKey(key) {
+      return `"${key.substring(0, 4)}...${key.substring(key.length - 4)}" (${key.length} chars)`;
+    }
+    
+    function saveApiKey(apiKey) {
+      if (apiKey && apiKey.length > 20) {
+        localStorage.setItem('elevenlabs_api_key', apiKey);
+      } else {
+        localStorage.removeItem('elevenlabs_api_key');
+      }
+    }
+    
+    function loadSavedApiKey() {
+      const savedApiKey = localStorage.getItem('elevenlabs_api_key');
+      if (savedApiKey) {
+        log(`📁 Loaded saved API key: ${maskApiKey(savedApiKey)}`);
+        document.getElementById('apiKey').value = savedApiKey;
+        if (savedApiKey.length > 20) loadVoices(savedApiKey);
+      }
+    }
+
+    // Voice Management
     async function loadVoices(apiKey) {
       const voiceSelect = document.getElementById('voiceId');
       try {
@@ -52,9 +78,7 @@
           headers: { 'xi-api-key': apiKey }
         });
         
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         
         const data = await response.json();
         voiceSelect.innerHTML = '<option value="">Select a voice...</option>';
@@ -67,174 +91,58 @@
         });
         
         voiceSelect.disabled = false;
-        log(`✅ Loaded ${data.voices.length} voices.`);
+        log(`✅ Loaded ${data.voices.length} voices`);
       } catch (error) {
         voiceSelect.innerHTML = '<option value="">Error loading voices</option>';
-        log('Error loading voices: ' + error.message);
+        log(`❌ Error loading voices: ${error.message}`);
       }
     }
 
-    // Load saved API key on page load
-    function loadSavedApiKey() {
-      const savedApiKey = localStorage.getItem('elevenlabs_api_key');
-      if (savedApiKey) {
-        const maskedKey = `"${savedApiKey.substring(0, 4)}...${savedApiKey.substring(savedApiKey.length - 4)}" (${savedApiKey.length} chars)`;
-        log(`📁 Loaded saved API key: ${maskedKey}`);
-        document.getElementById('apiKey').value = savedApiKey;
-        if (savedApiKey.length > 20) {
-          loadVoices(savedApiKey);
-        }
-      } else {
-        log('📁 No saved API key found in localStorage');
+    // Audio Processing
+    async function playChunk(bytes, audioCtx) {
+      try {
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        
+        const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        const buffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const src = audioCtx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(audioCtx.destination);
+        
+        const startTime = Math.max(audioCtx.currentTime, currentTimeRef.value);
+        src.start(startTime);
+        currentTimeRef.value = startTime + buffer.duration;
+        
+        log(`▶️ Playing audio: ${buffer.duration.toFixed(2)}s`);
+      } catch (e) {
+        log(`❌ Audio error: ${e.message}`);
       }
     }
 
-    // Save API key to localStorage
-    function saveApiKey(apiKey) {
-      if (apiKey && apiKey.length > 20) {
-        localStorage.setItem('elevenlabs_api_key', apiKey);
-        log('API key saved for future sessions.');
-      } else {
-        localStorage.removeItem('elevenlabs_api_key');
-      }
-    }
-
-    // Load voices when API key is entered
-    document.getElementById('apiKey').addEventListener('input', (e) => {
-      const apiKey = e.target.value.trim();
-      saveApiKey(apiKey); // Save to localStorage
-      
-      if (apiKey.length > 20) { // Basic check for API key format
-        const maskedKey = `"${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}" (${apiKey.length} chars)`;
-        log(`🔑 API Key entered: ${maskedKey}`);
-        loadVoices(apiKey);
-      } else {
-        const voiceSelect = document.getElementById('voiceId');
-        voiceSelect.innerHTML = '<option value="">Enter API key first to load voices...</option>';
-        voiceSelect.disabled = true;
-      }
-    });
-
-    // Clear API key button
-    document.getElementById('clearApiKey').addEventListener('click', () => {
-      localStorage.removeItem('elevenlabs_api_key');
-      document.getElementById('apiKey').value = '';
-      const voiceSelect = document.getElementById('voiceId');
-      voiceSelect.innerHTML = '<option value="">Enter API key first to load voices...</option>';
-      voiceSelect.disabled = true;
-      log('API key cleared from storage.');
-    });
-
-    // Load saved API key when page loads
-    window.addEventListener('load', loadSavedApiKey);
-
-    // Log voice selection when changed
-    document.getElementById('voiceId').addEventListener('change', (e) => {
-      const voiceId = e.target.value;
-      if (voiceId) {
-        const selectedOption = e.target.options[e.target.selectedIndex];
-        log(`🎤 Voice selected: ${selectedOption.textContent}`);
-      }
-    });
-
-    document.getElementById('startBtn').onclick = () => {
-      const apiKey = document.getElementById('apiKey').value.trim();
-      const voiceId = document.getElementById('voiceId').value.trim();
-      const modelId = 'eleven_flash_v2_5'; // Hardcoded for optimal streaming performance
-      
-      if (!apiKey || !voiceId) {
-        log('❌ ERROR: API Key and Voice ID selection are required.');
-        return;
-      }
-      
-      log(`🚀 Starting streaming with model: ${modelId}`);
-
-      const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream-input?model_id=${encodeURIComponent(modelId)}`;
-      
-      // WebSocket doesn't support custom headers in browser, so we'll include API key in first message
-      const ws = new WebSocket(wsUrl);
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      let bufferQueue = Promise.resolve();
-      let currentTimeRef = { value: 0 }; // Use object reference to fix scoping
-
-      ws.onopen = () => {
-        log('🔗 WebSocket connected');
-        streamText(ws, apiKey);
-      };
-
-      ws.onerror = (err) => log('WebSocket error: ' + (err.message || 'Unknown error'));
-      ws.onclose = (event) => {
-        if (event.code !== 1000) {
-          log(`⚠️ WebSocket closed unexpectedly. Code: ${event.code}`);
-        }
-      };
-
-      ws.onmessage = async ({ data }) => {
-        try {
-          const msg = JSON.parse(data);
-          log(`Received: ${msg.audio ? '[AUDIO_CHUNK]' : JSON.stringify(msg)}`);
-          
-          if (msg.audio) {
-            const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
-            bufferQueue = bufferQueue.then(() => playChunk(bytes, audioCtx, currentTimeRef));
-          }
-          
-          if (msg.isFinal) {
-            log('✅ Stream completed');
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.close();
-              }
-            }, 1000);
-          }
-          
-          if (msg.error || msg.message) {
-            log('⚠️ Server error: ' + (msg.error || msg.message));
-          }
-        } catch (e) {
-          log('Message parsing error: ' + e.message);
-          log('Raw message: ' + data);
-        }
-      };
-
-      // Streaming will be initiated from ws.onopen after BOS message
-    };
-
+    // Streaming
     async function streamText(ws, apiKey) {
-      if (ws.readyState !== WebSocket.OPEN) {
-        log('WebSocket not ready for streaming');
-        return;
-      }
+      if (ws.readyState !== WebSocket.OPEN) return;
       
       const text = "Hello world! This is a test of the ElevenLabs streaming API. The quick brown fox jumps over the lazy dog. This text should be long enough to trigger audio generation based on the character thresholds.";
       
-      log('📤 Initializing stream...');
-      const bosMessage = {
+      // Send BOS message
+      log('📤 Initializing stream');
+      ws.send(JSON.stringify({
         text: " ",
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.8
-        },
+        voice_settings: { stability: 0.5, similarity_boost: 0.8 },
         xi_api_key: apiKey
-      };
+      }));
       
-      ws.send(JSON.stringify(bosMessage));
-      
-      // Wait for BOS to be processed
       await new Promise(r => setTimeout(r, 1000));
-      
       if (ws.readyState !== WebSocket.OPEN) {
-        log('WebSocket closed after BOS - authentication failed');
+        log('❌ Authentication failed');
         return;
       }
       
-      // Send the actual text
+      // Send text
       log(`📝 Streaming text (${text.length} chars)`);
-      ws.send(JSON.stringify({
-        text: text
-      }));
+      ws.send(JSON.stringify({ text: text }));
       
-      // Wait a bit
       await new Promise(r => setTimeout(r, 1000));
       
       // Send EOS
@@ -244,31 +152,89 @@
       }
     }
 
-    async function playChunk(bytes, audioCtx, currentTimeRef) {
-      try {
-        // Ensure audio context is resumed (required for autoplay policy)
-        if (audioCtx.state === 'suspended') {
-          await audioCtx.resume();
-          log('Audio context resumed');
-        }
-        
-        const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-        const buffer = await audioCtx.decodeAudioData(arrayBuffer);
-        const src = audioCtx.createBufferSource();
-        src.buffer = buffer;
-        src.connect(audioCtx.destination);
-        
-        // Schedule playback to maintain continuity
-        const startTime = Math.max(audioCtx.currentTime, currentTimeRef.value);
-        src.start(startTime);
-        currentTimeRef.value = startTime + buffer.duration;
-        
-        log(`▶️ Playing audio: ${buffer.duration.toFixed(2)}s`);
-        
-      } catch (e) {
-        log('❌ Audio error: ' + e.message);
+    // Event Handlers
+    document.getElementById('apiKey').addEventListener('input', (e) => {
+      const apiKey = e.target.value.trim();
+      saveApiKey(apiKey);
+      
+      if (apiKey.length > 20) {
+        log(`🔑 API Key entered: ${maskApiKey(apiKey)}`);
+        loadVoices(apiKey);
+      } else {
+        const voiceSelect = document.getElementById('voiceId');
+        voiceSelect.innerHTML = '<option value="">Enter API key first to load voices...</option>';
+        voiceSelect.disabled = true;
       }
-    }
+    });
+
+    document.getElementById('voiceId').addEventListener('change', (e) => {
+      if (e.target.value) {
+        const selectedOption = e.target.options[e.target.selectedIndex];
+        log(`🎤 Voice selected: ${selectedOption.textContent}`);
+      }
+    });
+
+    document.getElementById('clearApiKey').addEventListener('click', () => {
+      localStorage.removeItem('elevenlabs_api_key');
+      document.getElementById('apiKey').value = '';
+      const voiceSelect = document.getElementById('voiceId');
+      voiceSelect.innerHTML = '<option value="">Enter API key first to load voices...</option>';
+      voiceSelect.disabled = true;
+      log('🗑️ API key cleared');
+    });
+
+    document.getElementById('startBtn').onclick = () => {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      const voiceId = document.getElementById('voiceId').value.trim();
+      
+      if (!apiKey || !voiceId) {
+        log('❌ API Key and Voice selection required');
+        return;
+      }
+      
+      log('🚀 Starting streaming with eleven_flash_v2_5');
+      currentTimeRef.value = 0; // Reset audio timing
+
+      const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream-input?model_id=eleven_flash_v2_5`;
+      const ws = new WebSocket(wsUrl);
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      let bufferQueue = Promise.resolve();
+
+      ws.onopen = () => {
+        log('🔗 WebSocket connected');
+        streamText(ws, apiKey);
+      };
+
+      ws.onmessage = async ({ data }) => {
+        try {
+          const msg = JSON.parse(data);
+          
+          if (msg.audio) {
+            const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
+            bufferQueue = bufferQueue.then(() => playChunk(bytes, audioCtx));
+          }
+          
+          if (msg.isFinal) {
+            log('✅ Stream completed');
+            setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.close(); }, 1000);
+          }
+          
+          if (msg.error || msg.message) {
+            log(`⚠️ Server error: ${msg.error || msg.message}`);
+          }
+        } catch (e) {
+          log(`❌ Parse error: ${e.message}`);
+        }
+      };
+
+      ws.onerror = (err) => log(`❌ WebSocket error: ${err.message || 'Unknown'}`);
+      ws.onclose = (event) => {
+        if (event.code !== 1000) log(`⚠️ WebSocket closed unexpectedly: ${event.code}`);
+      };
+    };
+
+    // Initialize
+    window.addEventListener('load', loadSavedApiKey);
   </script>
 </body>
 </html>
