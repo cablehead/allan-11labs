@@ -338,19 +338,27 @@
     }
 
     function cleanup() {
+      // Stop the worklet from processing new messages
       if (worklet) {
+        worklet.port.onmessage = null; // Stop handling messages
         worklet.disconnect();
         worklet = null;
       }
       
+      // Stop all media tracks (this stops the microphone)
       if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(track => {
+          track.stop();
+          addLog(`🛑 Stopped track: ${track.label}`);
+        });
         stream = null;
       }
       
       isCapturing = false;
       $('startCapture').disabled = false;
       $('stopCapture').disabled = true;
+      
+      addLog('🔌 Audio pipeline disconnected');
     }
 
     // Event listeners
