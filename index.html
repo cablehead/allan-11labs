@@ -2,160 +2,126 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ElevenLabs TTS</title>
+  <title>ElevenLabs AI Tools</title>
   <style>
-    body { font-family: system-ui; margin: 2rem; max-width: 600px; }
-    input, select, textarea, button { width: 100%; padding: 0.5rem; margin: 0.5rem 0; }
-    .flex { display: flex; gap: 0.5rem; }
-    .flex input { flex: 1; }
-    .flex button { width: auto; padding: 0.5rem 1rem; }
-    #log { font-family: monospace; background: #f5f5f5; padding: 0.5rem; height: 150px; overflow-y: auto; }
-    button { background: #007bff; color: white; border: none; cursor: pointer; }
-    button:disabled { background: #ccc; }
+    body { 
+      font-family: system-ui; 
+      margin: 2rem auto; 
+      max-width: 800px; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 3rem;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+    h1 { 
+      font-size: 3rem; 
+      margin-bottom: 1rem; 
+      background: linear-gradient(45deg, #ffd700, #ff6b6b);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle {
+      font-size: 1.2rem;
+      margin-bottom: 3rem;
+      opacity: 0.9;
+    }
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+    .tool-card {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 15px;
+      padding: 2rem;
+      text-decoration: none;
+      color: white;
+      transition: all 0.3s ease;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      position: relative;
+      overflow: hidden;
+    }
+    .tool-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 15px 35px rgba(31, 38, 135, 0.5);
+      background: rgba(255, 255, 255, 0.2);
+    }
+    .tool-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+      transform: translateX(-100%);
+      transition: transform 0.6s;
+    }
+    .tool-card:hover::before {
+      transform: translateX(100%);
+    }
+    .tool-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      display: block;
+    }
+    .tool-title {
+      font-size: 1.5rem;
+      font-weight: bold;
+      margin-bottom: 1rem;
+    }
+    .tool-description {
+      opacity: 0.9;
+      line-height: 1.5;
+    }
+    .footer {
+      margin-top: 3rem;
+      opacity: 0.7;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
-  <h1>ElevenLabs TTS</h1>
-
-  <label>API Key:</label>
-  <div class="flex">
-    <input type="password" id="apiKey" placeholder="Enter API key">
-    <button id="clear">Clear</button>
+  <div class="container">
+    <h1>ElevenLabs AI Tools</h1>
+    <div class="subtitle">Choose your AI-powered voice experience</div>
+    
+    <div class="tools-grid">
+      <a href="text-to-voice/" class="tool-card">
+        <div class="tool-icon">📝</div>
+        <div class="tool-title">Text-to-Voice</div>
+        <div class="tool-description">
+          Convert written text into natural-sounding speech using ElevenLabs' advanced TTS technology. 
+          Perfect for creating voiceovers, audiobooks, or accessibility features.
+        </div>
+      </a>
+      
+      <a href="voice-to-voice/" class="tool-card">
+        <div class="tool-icon">🗣️</div>
+        <div class="tool-title">Voice-to-Voice</div>
+        <div class="tool-description">
+          Have real-time conversations with AI agents using natural speech. 
+          Powered by ElevenLabs Conversational AI and enhanced with Claude for intelligent responses.
+        </div>
+      </a>
+    </div>
+    
+    <div class="footer">
+      Built with ❤️ using ElevenLabs API
+    </div>
   </div>
-  
-  <label>Voice:</label>
-  <select id="voice" disabled><option>Enter API key first...</option></select>
-
-  <label>Text:</label>
-  <textarea id="text" placeholder="Enter text to convert...">Hello world! This is a test.</textarea>
-
-  <button id="start" disabled>Generate Speech</button>
-  <div id="log"></div>
-
-  <script>
-    const $ = id => document.getElementById(id);
-    const apiKey = $('apiKey'), voice = $('voice'), text = $('text'), start = $('start'), log = $('log');
-    let audioTime = 0;
-
-    function addLog(msg) {
-      const lines = log.textContent.split('\n').filter(Boolean);
-      lines.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
-      if (lines.length > 50) lines.splice(0, lines.length - 50);
-      log.textContent = lines.join('\n');
-      log.scrollTop = log.scrollHeight;
-    }
-
-    function updateButton() {
-      start.disabled = !apiKey.value || !voice.value || !text.value.trim();
-    }
-
-    async function loadVoices() {
-      try {
-        voice.innerHTML = '<option>Loading...</option>';
-        const res = await fetch('https://api.elevenlabs.io/v1/voices', {
-          headers: { 'xi-api-key': apiKey.value }
-        });
-        const data = await res.json();
-        
-        voice.innerHTML = '<option value="">Select voice...</option>';
-        data.voices.forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v.voice_id;
-          opt.textContent = v.name;
-          voice.appendChild(opt);
-        });
-        voice.disabled = false;
-        addLog(`✓ Loaded ${data.voices.length} voices`);
-      } catch (e) {
-        voice.innerHTML = '<option>Error loading</option>';
-        addLog(`✗ Error loading voices: ${e.message}`);
-      }
-      updateButton();
-    }
-
-    async function playAudio(audioData, ctx) {
-      try {
-        const buffer = await ctx.decodeAudioData(audioData);
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        source.start(Math.max(ctx.currentTime, audioTime));
-        audioTime = Math.max(ctx.currentTime, audioTime) + buffer.duration;
-      } catch (e) {
-        addLog('Audio error: ' + e.message);
-      }
-    }
-
-    apiKey.oninput = () => {
-      if (apiKey.value.length > 20) {
-        localStorage.elevenlabs_key = apiKey.value;
-        addLog(`🔑 API key entered (${apiKey.value.slice(0,4)}...${apiKey.value.slice(-4)})`);
-        loadVoices();
-      } else {
-        voice.innerHTML = '<option>Enter API key first...</option>';
-        voice.disabled = true;
-        updateButton();
-      }
-    };
-
-    voice.onchange = text.oninput = updateButton;
-
-    $('clear').onclick = () => {
-      delete localStorage.elevenlabs_key;
-      apiKey.value = '';
-      voice.innerHTML = '<option>Enter API key first...</option>';
-      voice.disabled = true;
-      addLog('🗑️ API key cleared');
-      updateButton();
-    };
-
-    start.onclick = () => {
-      start.disabled = true;
-      audioTime = 0;
-      addLog('🚀 Starting TTS generation...');
-
-      const ws = new WebSocket(`wss://api.elevenlabs.io/v1/text-to-speech/${voice.value}/stream-input?model_id=eleven_flash_v2_5`);
-      const ctx = new (AudioContext || webkitAudioContext)();
-
-      ws.onopen = () => {
-        addLog('🔗 Connected to ElevenLabs');
-        ws.send(JSON.stringify({ text: " ", xi_api_key: apiKey.value }));
-        setTimeout(() => {
-          addLog(`📝 Streaming ${text.value.length} characters`);
-          ws.send(JSON.stringify({ text: text.value }));
-        }, 500);
-        setTimeout(() => ws.send(JSON.stringify({ text: "" })), 1000);
-      };
-
-      ws.onmessage = async ({ data }) => {
-        const msg = JSON.parse(data);
-        if (msg.audio) {
-          const bytes = Uint8Array.from(atob(msg.audio), c => c.charCodeAt(0));
-          await playAudio(bytes.buffer, ctx);
-          addLog('▶️ Playing audio chunk');
-        }
-        if (msg.isFinal) {
-          addLog('✅ Generation complete!');
-          ws.close();
-        }
-        if (msg.error) {
-          addLog(`❌ Server error: ${msg.error}`);
-        }
-      };
-
-      ws.onclose = () => {
-        start.disabled = false;
-        addLog('🔌 Connection closed');
-      };
-      ws.onerror = () => addLog('❌ WebSocket connection error');
-    };
-
-    // Load saved key
-    if (localStorage.elevenlabs_key) {
-      apiKey.value = localStorage.elevenlabs_key;
-      addLog(`📁 Loaded saved API key (${localStorage.elevenlabs_key.slice(0,4)}...${localStorage.elevenlabs_key.slice(-4)})`);
-      loadVoices();
-    }
-  </script>
 </body>
 </html>
