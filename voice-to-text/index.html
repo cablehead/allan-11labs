@@ -153,9 +153,6 @@
     
     <label>Agent ID:</label>
     <input type="text" id="agentId" placeholder="Enter Agent ID">
-    
-    <label>Voice (optional - agent may have its own):</label>
-    <select id="voice" disabled><option>Enter API key first...</option></select>
   </div>
 
   <div class="transcription-box empty" id="transcriptionBox">
@@ -168,7 +165,7 @@
 
   <script>
     const $ = id => document.getElementById(id);
-    const apiKey = $('apiKey'), voice = $('voice'), agentId = $('agentId'), micButton = $('micButton'), log = $('log');
+    const apiKey = $('apiKey'), agentId = $('agentId'), micButton = $('micButton'), log = $('log');
     const transcriptionBox = $('transcriptionBox'), connectionStatus = $('connectionStatus');
     
     // Global state
@@ -206,29 +203,7 @@
       micButton.disabled = !hasConfig;
     }
 
-    async function loadVoices() {
-      try {
-        voice.innerHTML = '<option>Loading...</option>';
-        const res = await fetch('https://api.elevenlabs.io/v1/voices', {
-          headers: { 'xi-api-key': apiKey.value }
-        });
-        const data = await res.json();
-        
-        voice.innerHTML = '<option value="">Select voice...</option>';
-        data.voices.forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v.voice_id;
-          opt.textContent = v.name;
-          voice.appendChild(opt);
-        });
-        voice.disabled = false;
-        addLog(`✓ Loaded ${data.voices.length} voices`);
-      } catch (e) {
-        voice.innerHTML = '<option>Error loading</option>';
-        addLog(`✗ Error loading voices: ${e.message}`);
-      }
-      updateButtons();
-    }
+
 
     function openWebSocket() {
       if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -265,16 +240,40 @@
       
       ws.onmessage = handleServerEvent;
       
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         updateConnectionStatus('disconnected');
-        addLog('🔌 WebSocket connection closed');
+        addLog(`🔌 WebSocket closed - Code: ${event.code}, Reason: "${event.reason}" (Clean: ${event.wasClean})`);
+        
+        // Common WebSocket close codes for reference
+        const closeCodes = {
+          1000: 'Normal closure',
+          1001: 'Going away',
+          1002: 'Protocol error',
+          1003: 'Unsupported data',
+          1005: 'No status code',
+          1006: 'Abnormal closure',
+          1007: 'Invalid data',
+          1008: 'Policy violation',
+          1009: 'Message too big',
+          1010: 'Extension expected',
+          1011: 'Server error',
+          1012: 'Service restart',
+          1013: 'Try again later',
+          1014: 'Bad gateway',
+          1015: 'TLS handshake failure'
+        };
+        
+        const codeDescription = closeCodes[event.code] || 'Unknown';
+        addLog(`📋 Close code ${event.code} means: ${codeDescription}`);
+        
         cleanup();
         updateButtons();
       };
       
-      ws.onerror = () => {
+      ws.onerror = (error) => {
         updateConnectionStatus('disconnected');
         addLog('❌ WebSocket connection error');
+        console.error('WebSocket error:', error);
       };
     }
 
@@ -282,23 +281,21 @@
       const init = {
         type: "conversation_initiation_client_data",
         conversation_initiation_client_data: {
-          client_supplied_trace_id: crypto.randomUUID()
-          // Don't override agent config - let it use its default voice
-          // agent: { voice_id: voice.value },
-          // llm: { provider: "custom" },
-          // text_to_speech: { model_id: "eleven_flash_v2_5" }
+          client_supplied_trace_id: crypto.randomUUID(),
+          xi_api_key: apiKey.value // Add API key to init packet
         }
       };
       ws.send(JSON.stringify(init));
-      addLog("🪄 Session initialization sent (using agent defaults)");
+      addLog("🪄 Session initialization sent with API key");
     }
 
     async function handleServerEvent({ data }) {
       const msg = JSON.parse(data);
       
-      // Debug logging (skip ping and frequent VAD events)
-      if (msg.type !== "ping" && msg.type !== "vad_score") {
+      // Debug logging - show ALL events for now
+      if (msg.type !== "ping") {
         console.debug("📨 Received:", msg.type, msg);
+        addLog(`📨 Server event: ${msg.type}`);
       }
 
       switch (msg.type) {
@@ -308,10 +305,10 @@
           break;
 
         case "vad_score":
-          // Voice Activity Detection score
+          // Voice Activity Detection score - show ALL scores for debugging
           const vadScore = msg.vad_score_event.vad_score;
-          if (vadScore > 0.6 && (!window._lastVadLog || Date.now() - window._lastVadLog > 2000)) {
-            addLog(`🎯 Voice activity detected (score: ${vadScore.toFixed(2)})`);
+          if (!window._lastVadLog || Date.now() - window._lastVadLog > 1000) {
+            addLog(`🎯 VAD score: ${vadScore.toFixed(3)} ${vadScore > 0.6 ? '(VOICE DETECTED!)' : '(quiet)'}`);
             window._lastVadLog = Date.now();
           }
           break;
@@ -347,7 +344,7 @@
 
         default:
           console.warn("Unknown event:", msg.type, msg);
-          addLog(`❓ Unknown event: ${msg.type}`);
+          addLog(`❓ UNKNOWN EVENT: ${msg.type} - ${JSON.stringify(msg).slice(0, 200)}...`);
       }
     }
 
@@ -377,8 +374,41 @@
         
         // Handle audio data from worklet
         worklet.port.onmessage = ({ data }) => {
+          // Handle debug messages from worklet
+          if (data && typeof data === 'object' && data.type === 'debug') {
+            addLog(`🔧 Worklet: ${data.message}`);
+            return;
+          }
+          // Only process audio buffers (ArrayBuffer), skip debug messages
+          if (!data || !(data instanceof ArrayBuffer)) {
+            return;
+          }
+          
           if (!ws || ws.readyState !== WebSocket.OPEN) {
             return;
+          }
+
+          // Debug: Check if we're getting real audio data
+          const view = new Uint8Array(data);
+          let nonZeroCount = 0;
+          let maxValue = 0;
+          for (let i = 0; i < Math.min(100, view.length); i++) {
+            if (view[i] !== 0) nonZeroCount++;
+            maxValue = Math.max(maxValue, Math.abs(view[i]));
+          }
+          
+          if (!window._audioDataDebug || Date.now() - window._audioDataDebug > 3000) {
+            addLog(`🔍 Audio data check: ${nonZeroCount}/100 non-zero samples, max: ${maxValue}`);
+            window._audioDataDebug = Date.now();
+          }
+          
+          // If all zeros, don't send (might be silence or mic issue)
+          if (nonZeroCount === 0) {
+            if (!window._silenceWarned) {
+              addLog('⚠️ WARNING: Audio data is all zeros - check microphone!');
+              window._silenceWarned = true;
+            }
+            return; // Skip sending silent chunks
           }
 
           // Convert audio data to base64 for ElevenLabs API
@@ -386,20 +416,33 @@
           if (typeof data === "string") {
             b64 = data;
           } else {
-            const view = new Uint8Array(data);
             let bin = "";
             for (let i = 0; i < view.length; i++) bin += String.fromCharCode(view[i]);
             b64 = btoa(bin);
           }
 
-          // Send audio chunk to ElevenLabs
-          ws.send(JSON.stringify({
+          // Send audio chunk to ElevenLabs - try different format
+          const audioMessage = {
             type: "user_audio_chunk",
-            user_audio_chunk: { 
-              audio: b64, 
-              timestamp: Date.now() 
+            user_audio_chunk_event: {  // Maybe it needs _event suffix?
+              audio_base_64: b64,      // Maybe it needs _base_64 suffix?
+              timestamp: Date.now()
             }
-          }));
+          };
+          
+          ws.send(JSON.stringify(audioMessage));
+          
+          // Also try without timestamp
+          // ws.send(JSON.stringify({
+          //   type: "user_audio_chunk", 
+          //   user_audio_chunk: { audio: b64 }
+          // }));
+          
+          // Debug the exact message we're sending
+          if (!window._debuggedFirstChunk) {
+            window._debuggedFirstChunk = true;
+            addLog(`📝 First real audio message format test`);
+          }
 
           // Occasional logging
           if (!window._lastAudioLog || Date.now() - window._lastAudioLog > 2000) {
@@ -461,21 +504,17 @@
       if (apiKey.value.length > 20) {
         localStorage.elevenlabs_key = apiKey.value;
         addLog(`🔑 API key entered (${apiKey.value.slice(0,4)}...${apiKey.value.slice(-4)})`);
-        loadVoices();
+        updateButtons();
       } else {
-        voice.innerHTML = '<option>Enter API key first...</option>';
-        voice.disabled = true;
         updateButtons();
       }
     };
 
-    voice.onchange = agentId.oninput = updateButtons;
+    agentId.oninput = updateButtons;
 
     $('clear').onclick = () => {
       delete localStorage.elevenlabs_key;
       apiKey.value = '';
-      voice.innerHTML = '<option>Enter API key first...</option>';
-      voice.disabled = true;
       addLog('🗑️ API key cleared');
       updateButtons();
     };
@@ -511,7 +550,7 @@
       if (localStorage.elevenlabs_key) {
         apiKey.value = localStorage.elevenlabs_key;
         addLog(`📁 Loaded saved API key (${localStorage.elevenlabs_key.slice(0,4)}...${localStorage.elevenlabs_key.slice(-4)})`);
-        loadVoices();
+        updateButtons();
       }
       
       // iOS audio unlock
