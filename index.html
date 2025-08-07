@@ -20,7 +20,9 @@
       margin: 1rem 0; 
       user-select: none;
     }
-    #push:active { background: #1e7e34; transform: scale(0.98); }
+    #push.active { background: #dc3545; }
+    #push:hover { background: #218838; }
+    #push.active:hover { background: #c82333; }
     #hangup { background: #dc3545; }
     #hangup:hover { background: #c82333; }
     .user-msg { color: #0066cc; font-weight: bold; }
@@ -57,7 +59,7 @@
     </div>
   </div>
 
-  <button id="push" disabled>🎤 Hold to Talk</button>
+  <button id="push" disabled>🎤 Start Microphone</button>
   <button id="hangup" disabled>📞 Hang Up</button>
 
   <div id="log"></div>
@@ -138,8 +140,21 @@
       ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       
-      ws.onopen = () => {
+      ws.onopen = async () => {
+        addLog("✓ WebSocket connected");
         audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 16000 });
+        
+        // Ensure AudioContext is running (required in some browsers)
+        if (audioCtx.state === 'suspended') {
+          try {
+            await audioCtx.resume();
+            addLog(`🔄 AudioContext resumed`);
+          } catch (e) {
+            addLog(`⚠️ AudioContext resume failed: ${e.message}`);
+          }
+        }
+        
+        addLog(`🎧 AudioContext created (sampleRate: ${audioCtx.sampleRate}Hz, state: ${audioCtx.state})`);
         sendInitPacket(apiKeyValue, voiceIdValue);
         updateButtons();
       };
@@ -166,6 +181,11 @@
     // Server → client events
     async function handleServerEvent({ data }) {
       const msg = JSON.parse(data);
+      
+      // Debug logging for all events
+      if (msg.type !== "ping" && msg.type !== "vad_score") {
+        console.debug("📨 Received:", msg.type, msg);
+      }
 
       switch (msg.type) {
         case "ping":
@@ -173,7 +193,11 @@
           break;
 
         case "vad_score":
-          // Optional: could light up UI when msg.vad_score_event.vad_score > 0.6
+          // Show VAD activity occasionally 
+          if (msg.vad_score_event.vad_score > 0.6 && (!window._lastVadLog || Date.now() - window._lastVadLog > 2000)) {
+            addLog(`🎯 Voice activity detected (${msg.vad_score_event.vad_score.toFixed(2)})`);
+            window._lastVadLog = Date.now();
+          }
           break;
 
         case "user_transcript":
@@ -185,8 +209,18 @@
           playAudio64(msg.audio_event.audio_base_64);
           break;
 
+        case "conversation_initiation_client_data_response":
+          addLog("✓ Conversation initiated");
+          break;
+
+        case "conversation_initiation_metadata":
+          conversationId = msg.conversation_initiation_metadata_event.conversation_id;
+          addLog(`✓ Conversation metadata received (ID: ${conversationId.slice(-8)})`);
+          break;
+
         default:
-          console.warn("unknown event", msg);
+          console.warn("unknown event", msg.type, msg);
+          addLog(`❓ Unknown event: ${msg.type}`);
       }
     }
 
@@ -274,21 +308,123 @@
     // Microphone capture
     async function startCapture() {
       try {
+        if (!audioCtx) {
+          addLog("❌ AudioContext not ready");
+          return;
+        }
+        
+        // Ensure AudioContext is running
+        if (audioCtx.state === 'suspended') {
+          try {
+            await audioCtx.resume();
+            addLog(`🔄 AudioContext resumed for capture`);
+          } catch (e) {
+            addLog(`❌ AudioContext resume failed: ${e.message}`);
+            return;
+          }
+        }
+        
+        addLog(`🎧 AudioContext state: ${audioCtx.state}`);
+        
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Debug: check stream properties
+        const audioTracks = stream.getAudioTracks();
+        addLog(`🎤 Got ${audioTracks.length} audio track(s)`);
+        audioTracks.forEach((track, i) => {
+          console.debug(`📊 Track ${i}:`, {
+            enabled: track.enabled,
+            muted: track.muted,
+            readyState: track.readyState,
+            label: track.label
+          });
+          addLog(`Track ${i}: ${track.label} (${track.readyState})`);
+        });
+        
         const source = audioCtx.createMediaStreamSource(stream);
-        await audioCtx.audioWorklet.addModule("pcm-worklet.js");
+        addLog(`🔊 Audio source created`);
+        
+        // Load worklet with better error handling
+        try {
+          await audioCtx.audioWorklet.addModule("pcm-worklet.js");
+          addLog("✓ Audio worklet loaded");
+        } catch (e) {
+          addLog(`❌ Failed to load audio worklet: ${e.message}`);
+          throw e;
+        }
+        
         worklet = new AudioWorkletNode(audioCtx, "pcm-encoder");
+        addLog(`💵 AudioWorkletNode created`);
+        
+        // Test if worklet is working at all
+        setTimeout(() => {
+          console.debug("📋 Worklet status check - if no audio frames logged, there's a connection issue");
+        }, 2000);
         
         worklet.port.onmessage = ({ data }) => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
+          // Debug: log every message we get from worklet
+          if (!window._audioDebugCount) window._audioDebugCount = 0;
+          window._audioDebugCount++;
+          
+          if (window._audioDebugCount <= 5 || window._audioDebugCount % 50 === 0) {
+            console.debug(`🟢 Worklet message #${window._audioDebugCount}:`, typeof data, data?.length || data?.byteLength || "unknown size");
+          }
+          
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.debug("❌ WebSocket not ready, dropping audio chunk");
+            return;
+          }
+
+          // --------------------------------------------------
+          // 1. Ensure we hand the server a BASE-64 string
+          // --------------------------------------------------
+          let b64;
+          if (typeof data === "string") {
+            // old worklet already did the btoa()
+            b64 = data;
+          } else {
+            // data is an ArrayBuffer -> Uint8Array -> binary string -> btoa
+            const view = new Uint8Array(data);
+            let bin = "";
+            for (let i = 0; i < view.length; i++) bin += String.fromCharCode(view[i]);
+            b64 = btoa(bin);
+          }
+
+          // --------------------------------------------------
+          // 2. Send the chunk
+          // --------------------------------------------------
+          ws.send(
+            JSON.stringify({
               type: "user_audio_chunk",
-              user_audio_chunk: { audio: data, timestamp: Date.now() }
-            }));
+              user_audio_chunk: { audio: b64, timestamp: Date.now() }
+            })
+          );
+
+          // --------------------------------------------------
+          // 3. Debug: show one packet / s
+          // --------------------------------------------------
+          if (!window._lastLog || Date.now() - window._lastLog > 1000) {
+            console.debug("🎧 sent audio chunk", b64.length, "bytes (base-64)");
+            addLog(`🎧 Sending audio chunks (${b64.length} bytes)`); 
+            window._lastLog = Date.now();
           }
         };
         
-        source.connect(worklet).connect(audioCtx.destination);
+        try {
+          source.connect(worklet);
+          addLog(`🔗 Audio routing connected: Mic → Worklet`);
+          
+          // Test connection by checking if we get any audio data
+          setTimeout(() => {
+            if (!window._audioDebugCount || window._audioDebugCount === 0) {
+              addLog("⚠️ WARNING: No audio data received after 3 seconds - check microphone permissions!");
+            }
+          }, 3000);
+          
+        } catch (e) {
+          addLog(`❌ Audio connection failed: ${e.message}`);
+          throw e;
+        }
         addLog("🎤 Microphone active");
       } catch (e) {
         addLog(`❌ Microphone error: ${e.message}`);
@@ -319,6 +455,12 @@
         stream.getTracks().forEach(track => track.stop());
         stream = null;
       }
+      
+      // Reset microphone button state
+      micActive = false;
+      push.classList.remove('active');
+      push.textContent = "🎤 Start Microphone";
+      
       updateButtons();
       addLog("🔌 Connection closed");
     }
@@ -364,27 +506,53 @@
       updateButtons();
     };
 
-    // Push-to-talk UI
-    push.onpointerdown = () => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        openSocket(agentId.value, apiKey.value, voice.value);
-        // Wait a bit for connection before starting capture
-        setTimeout(startCapture, 500);
+    // Toggle microphone on/off
+    let micActive = false;
+    
+    push.onclick = async () => {
+      if (!micActive) {
+        // Start microphone
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          addLog("🔗 Connecting to ElevenLabs...");
+          openSocket(agentId.value, apiKey.value, voice.value);
+          
+          // Wait for connection to establish
+          const maxWait = 5000; // 5 seconds max
+          const startTime = Date.now();
+          
+          while ((!ws || ws.readyState !== WebSocket.OPEN) && (Date.now() - startTime < maxWait)) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            addLog("❌ Connection timeout - try again");
+            return;
+          }
+        }
+        
+        addLog("🎤 Starting microphone...");
+        await startCapture();
+        
+        micActive = true;
+        push.classList.add('active');
+        push.textContent = "🔴 Stop Microphone";
+        
       } else {
-        startCapture();
+        // Stop microphone
+        if (worklet) {
+          worklet.disconnect();
+          worklet = null;
+        }
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          stream = null;
+        }
+        
+        micActive = false;
+        push.classList.remove('active');
+        push.textContent = "🎤 Start Microphone";
+        addLog("🎤 Microphone stopped");
       }
-    };
-
-    push.onpointerup = () => {
-      if (worklet) {
-        worklet.disconnect();
-        worklet = null;
-      }
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        stream = null;
-      }
-      addLog("🎤 Microphone released");
     };
 
     hangup.onclick = () => {
