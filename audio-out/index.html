@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Audio Output Test</title>
+  <title>Audio Output Test - TTS Pattern</title>
   <style>
     body { 
       font-family: system-ui; 
@@ -40,24 +40,6 @@
       border-radius: 4px;
       white-space: pre-wrap;
     }
-    .test-section {
-      margin: 2rem 0;
-      padding: 1rem;
-      border: 1px solid #e0e0e0;
-      border-radius: 4px;
-      background: #fafafa;
-    }
-    .test-section h3 {
-      margin-top: 0;
-      color: #333;
-    }
-    .audio-controls {
-      margin: 0.5rem 0;
-    }
-    audio {
-      width: 100%;
-      margin: 0.5rem 0;
-    }
     .info {
       background: #e3f2fd;
       padding: 1rem;
@@ -75,11 +57,12 @@
   </style>
 </head>
 <body>
-  <h1>Audio Output Test</h1>
+  <h1>Audio Output Test - TTS Pattern</h1>
   
   <div class="info">
-    <strong>Purpose:</strong> This page tests different audio output methods to isolate iOS compatibility issues.
-    Each test uses a different approach to generate and play audio.
+    <strong>Purpose:</strong> This test replicates the exact audio playback pattern used in text-to-voice:
+    <br>• Generate audio data → decodeAudioData → BufferSource → queued playback
+    <br>• Multiple audio chunks played in sequence using audioTime
   </div>
 
   <div class="device-info" id="deviceInfo">
@@ -88,51 +71,18 @@
 
   <div id="log"></div>
 
-  <div class="test-section">
-    <h3>Test 1: Web Audio API with Generated Tone</h3>
-    <p>Creates a simple sine wave tone using Web Audio API</p>
-    <button id="test1">Play Generated Tone (440Hz)</button>
-  </div>
-
-  <div class="test-section">
-    <h3>Test 2: Web Audio API with Audio Buffer</h3>
-    <p>Creates audio data in a buffer and plays it</p>
-    <button id="test2">Play Buffer Audio</button>
-  </div>
-
-  <div class="test-section">
-    <h3>Test 3: HTML5 Audio Element with Data URL</h3>
-    <p>Uses HTML5 audio element with base64 encoded audio data</p>
-    <button id="test3">Play via Audio Element</button>
-    <div class="audio-controls">
-      <audio id="audioElement" controls></audio>
-    </div>
-  </div>
-
-  <div class="test-section">
-    <h3>Test 4: Web Audio API Context State Test</h3>
-    <p>Tests AudioContext initialization and state management</p>
-    <button id="test4">Test AudioContext</button>
-    <button id="resume">Resume AudioContext</button>
-  </div>
-
-  <div class="test-section">
-    <h3>Test 5: Decode Audio Data Test</h3>
-    <p>Tests decoding audio data (similar to the TTS implementation)</p>
-    <button id="test5">Test Audio Decoding</button>
-  </div>
+  <button id="testAudio">Test TTS Audio Pattern</button>
 
   <script>
     const $ = id => document.getElementById(id);
     const log = $('log');
-    let audioContext = null;
-    let testAudioData = null;
+    let audioTime = 0; // Matches the TTS implementation
 
     function addLog(msg) {
       const lines = log.textContent.split('\n').filter(Boolean);
       const timestamp = new Date().toLocaleTimeString();
       lines.push(`[${timestamp}] ${msg}`);
-      if (lines.length > 100) lines.splice(0, lines.length - 100);
+      if (lines.length > 50) lines.splice(0, lines.length - 50);
       log.textContent = lines.join('\n');
       log.scrollTop = log.scrollHeight;
     }
@@ -142,20 +92,17 @@
       const isIOS = /iPad|iPhone|iPod/.test(ua);
       const isMacOS = /Mac OS X/.test(ua) && !isIOS;
       const isSafari = /Safari/.test(ua) && !/Chrome/.test(ua);
-      const isChrome = /Chrome/.test(ua);
       
       let info = `Device: ${isIOS ? 'iOS' : isMacOS ? 'macOS' : 'Other'}\n`;
-      info += `Browser: ${isSafari ? 'Safari' : isChrome ? 'Chrome' : 'Other'}\n`;
-      info += `User Agent: ${ua}\n`;
-      info += `AudioContext: ${window.AudioContext ? 'Available' : 'Not Available'}\n`;
-      info += `webkitAudioContext: ${window.webkitAudioContext ? 'Available' : 'Not Available'}`;
+      info += `Browser: ${isSafari ? 'Safari' : 'Chrome/Other'}\n`;
+      info += `AudioContext: ${window.AudioContext ? '✓' : '✗'} webkitAudioContext: ${window.webkitAudioContext ? '✓' : '✗'}`;
       
       $('deviceInfo').textContent = info;
-      addLog(`Device detected: ${isIOS ? 'iOS' : isMacOS ? 'macOS' : 'Other'}`);
+      addLog(`Device: ${isIOS ? 'iOS' : isMacOS ? 'macOS' : 'Other'}`);
     }
 
-    // Generate a simple WAV file data
-    function generateWAV(frequency = 440, duration = 1, sampleRate = 44100) {
+    // Generate a simple WAV file that can be decoded by decodeAudioData
+    function generateTestWAV(frequency = 440, duration = 0.5, sampleRate = 44100) {
       const numSamples = sampleRate * duration;
       const buffer = new ArrayBuffer(44 + numSamples * 2);
       const view = new DataView(buffer);
@@ -172,8 +119,8 @@
       writeString(8, 'WAVE');
       writeString(12, 'fmt ');
       view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
-      view.setUint16(22, 1, true);
+      view.setUint16(20, 1, true); // PCM
+      view.setUint16(22, 1, true); // Mono
       view.setUint32(24, sampleRate, true);
       view.setUint32(28, sampleRate * 2, true);
       view.setUint16(32, 2, true);
@@ -181,7 +128,7 @@
       writeString(36, 'data');
       view.setUint32(40, numSamples * 2, true);
       
-      // Audio data
+      // Audio data - simple sine wave
       let offset = 44;
       for (let i = 0; i < numSamples; i++) {
         const sample = Math.sin(2 * Math.PI * frequency * i / sampleRate) * 0.3;
@@ -192,241 +139,97 @@
       return buffer;
     }
 
-    // Test 1: Web Audio API with Generated Tone
-    $('test1').onclick = async () => {
+    // EXACT replica of the playAudio function from text-to-voice
+    async function playAudio(audioData, ctx) {
       try {
-        addLog('Test 1: Starting Web Audio API tone generation...');
+        addLog('▶️ Decoding audio data...');
+        const buffer = await ctx.decodeAudioData(audioData);
+        addLog(`✓ Decoded: ${buffer.duration.toFixed(2)}s, ${buffer.sampleRate}Hz`);
         
-        if (!audioContext) {
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          addLog(`AudioContext created, state: ${audioContext.state}`);
-        }
-        
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
-          addLog(`AudioContext resumed, new state: ${audioContext.state}`);
-        }
-        
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
-        oscillator.type = 'sine';
-        
-        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1);
-        
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 1);
-        
-        addLog('✓ Tone should be playing for 1 second');
-        
-        oscillator.onended = () => {
-          addLog('✓ Tone playback completed');
-        };
-        
-      } catch (error) {
-        addLog(`✗ Test 1 failed: ${error.message}`);
-        console.error('Test 1 error:', error);
-      }
-    };
-
-    // Test 2: Web Audio API with Audio Buffer
-    $('test2').onclick = async () => {
-      try {
-        addLog('Test 2: Starting Web Audio API buffer test...');
-        
-        if (!audioContext) {
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          addLog(`AudioContext created, state: ${audioContext.state}`);
-        }
-        
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
-          addLog(`AudioContext resumed, new state: ${audioContext.state}`);
-        }
-        
-        const sampleRate = audioContext.sampleRate;
-        const duration = 0.5;
-        const numSamples = sampleRate * duration;
-        
-        const buffer = audioContext.createBuffer(1, numSamples, sampleRate);
-        const channelData = buffer.getChannelData(0);
-        
-        // Generate a simple tone
-        for (let i = 0; i < numSamples; i++) {
-          channelData[i] = Math.sin(2 * Math.PI * 880 * i / sampleRate) * 0.1;
-        }
-        
-        const source = audioContext.createBufferSource();
+        const source = ctx.createBufferSource();
         source.buffer = buffer;
-        source.connect(audioContext.destination);
-        source.start();
+        source.connect(ctx.destination);
         
-        addLog('✓ Buffer audio should be playing for 0.5 seconds');
+        const startTime = Math.max(ctx.currentTime, audioTime);
+        source.start(startTime);
+        audioTime = startTime + buffer.duration;
+        
+        addLog(`🎵 Playing at time ${startTime.toFixed(2)}s, next at ${audioTime.toFixed(2)}s`);
         
         source.onended = () => {
-          addLog('✓ Buffer playback completed');
+          addLog('✓ Audio chunk completed');
         };
         
-      } catch (error) {
-        addLog(`✗ Test 2 failed: ${error.message}`);
-        console.error('Test 2 error:', error);
+      } catch (e) {
+        addLog(`❌ Audio error: ${e.message}`);
+        console.error('playAudio error:', e);
       }
-    };
+    }
 
-    // Test 3: HTML5 Audio Element
-    $('test3').onclick = () => {
+    // Test the exact TTS pattern
+    $('testAudio').onclick = async () => {
       try {
-        addLog('Test 3: Starting HTML5 audio element test...');
+        $('testAudio').disabled = true;
+        audioTime = 0; // Reset like TTS does
         
-        const wavData = generateWAV(523, 0.5); // C5 note
-        const blob = new Blob([wavData], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
+        addLog('🚀 Starting TTS pattern test...');
         
-        const audioElement = $('audioElement');
-        audioElement.src = url;
+        // Create AudioContext like TTS does
+        const ctx = new (AudioContext || webkitAudioContext)();
+        addLog(`🎤 AudioContext created, state: ${ctx.state}`);
         
-        audioElement.onloadeddata = () => {
-          addLog('✓ Audio data loaded into element');
-        };
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+          addLog(`🔄 AudioContext resumed, new state: ${ctx.state}`);
+        }
         
-        audioElement.onplay = () => {
-          addLog('✓ Audio element started playing');
-        };
+        // Generate 3 audio chunks to simulate streaming like TTS
+        const frequencies = [440, 523, 659]; // A4, C5, E5
+        const chunks = frequencies.map(freq => generateTestWAV(freq, 0.4));
         
-        audioElement.onended = () => {
-          addLog('✓ Audio element playback completed');
-          URL.revokeObjectURL(url);
-        };
+        addLog(`📦 Generated ${chunks.length} audio chunks`);
         
-        audioElement.onerror = (e) => {
-          addLog(`✗ Audio element error: ${e.target.error?.message || 'Unknown error'}`);
-        };
+        // Play chunks in sequence using the exact TTS pattern
+        for (let i = 0; i < chunks.length; i++) {
+          addLog(`Processing chunk ${i + 1}/${chunks.length}...`);
+          await playAudio(chunks[i].slice(), ctx); // .slice() to copy like base64 decode does
+          
+          // Small delay to simulate streaming
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
         
-        audioElement.play().then(() => {
-          addLog('✓ Audio element play() promise resolved');
-        }).catch(error => {
-          addLog(`✗ Audio element play() failed: ${error.message}`);
-        });
+        addLog('✅ All chunks queued for playback');
+        
+        // Re-enable button after all audio should be done
+        setTimeout(() => {
+          $('testAudio').disabled = false;
+          addLog('🔌 Test complete - button re-enabled');
+        }, 2000);
         
       } catch (error) {
-        addLog(`✗ Test 3 failed: ${error.message}`);
-        console.error('Test 3 error:', error);
-      }
-    };
-
-    // Test 4: AudioContext State Test
-    $('test4').onclick = () => {
-      try {
-        addLog('Test 4: Testing AudioContext state...');
-        
-        if (!audioContext) {
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          addLog(`New AudioContext created`);
-        }
-        
-        addLog(`AudioContext state: ${audioContext.state}`);
-        addLog(`AudioContext sampleRate: ${audioContext.sampleRate}`);
-        addLog(`AudioContext baseLatency: ${audioContext.baseLatency || 'Not available'}`);
-        addLog(`AudioContext outputLatency: ${audioContext.outputLatency || 'Not available'}`);
-        
-        if (audioContext.state === 'suspended') {
-          addLog('⚠️ AudioContext is suspended - user interaction may be required');
-        } else {
-          addLog('✓ AudioContext is ready');
-        }
-        
-      } catch (error) {
-        addLog(`✗ Test 4 failed: ${error.message}`);
-        console.error('Test 4 error:', error);
-      }
-    };
-
-    // Resume AudioContext
-    $('resume').onclick = async () => {
-      try {
-        if (!audioContext) {
-          addLog('No AudioContext to resume');
-          return;
-        }
-        
-        addLog(`Attempting to resume AudioContext (current state: ${audioContext.state})`);
-        
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
-          addLog(`✓ AudioContext resumed (new state: ${audioContext.state})`);
-        } else {
-          addLog(`AudioContext is already ${audioContext.state}`);
-        }
-        
-      } catch (error) {
-        addLog(`✗ Failed to resume AudioContext: ${error.message}`);
-        console.error('Resume error:', error);
-      }
-    };
-
-    // Test 5: Decode Audio Data (similar to TTS implementation)
-    $('test5').onclick = async () => {
-      try {
-        addLog('Test 5: Testing audio data decoding...');
-        
-        if (!audioContext) {
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          addLog(`AudioContext created, state: ${audioContext.state}`);
-        }
-        
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
-          addLog(`AudioContext resumed, new state: ${audioContext.state}`);
-        }
-        
-        // Generate test audio data
-        const wavData = generateWAV(330, 0.3); // E4 note
-        
-        try {
-          const buffer = await audioContext.decodeAudioData(wavData.slice());
-          addLog(`✓ Audio data decoded successfully`);
-          addLog(`  - Duration: ${buffer.duration.toFixed(2)}s`);
-          addLog(`  - Sample rate: ${buffer.sampleRate}Hz`);
-          addLog(`  - Channels: ${buffer.numberOfChannels}`);
-          
-          // Play the decoded buffer
-          const source = audioContext.createBufferSource();
-          source.buffer = buffer;
-          source.connect(audioContext.destination);
-          source.start();
-          
-          addLog('✓ Decoded audio should be playing');
-          
-          source.onended = () => {
-            addLog('✓ Decoded audio playback completed');
-          };
-          
-        } catch (decodeError) {
-          addLog(`✗ Audio decoding failed: ${decodeError.message}`);
-          console.error('Decode error:', decodeError);
-        }
-        
-      } catch (error) {
-        addLog(`✗ Test 5 failed: ${error.message}`);
-        console.error('Test 5 error:', error);
+        addLog(`❌ Test failed: ${error.message}`);
+        console.error('Test error:', error);
+        $('testAudio').disabled = false;
       }
     };
 
     // Initialize
     document.addEventListener('DOMContentLoaded', () => {
-      addLog('Audio Output Test initialized');
+      addLog('TTS Audio Pattern Test initialized');
       detectDevice();
       
-      // Add click handler to potentially unlock audio on iOS
+      // iOS audio unlock - create context on first touch
       document.addEventListener('touchstart', () => {
-        if (!audioContext) {
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          addLog('AudioContext created via touch interaction');
+        try {
+          const ctx = new (AudioContext || webkitAudioContext)();
+          addLog('📱 AudioContext unlocked via touch');
+          if (ctx.state === 'suspended') {
+            ctx.resume().then(() => {
+              addLog('📱 AudioContext resumed via touch');
+            });
+          }
+        } catch (e) {
+          addLog(`📱 Touch unlock failed: ${e.message}`);
         }
       }, { once: true });
     });
