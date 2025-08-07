@@ -2,138 +2,118 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ElevenLabs AI Tools</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comedy Colliders</title>
   <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
     body { 
-      font-family: system-ui; 
-      margin: 2rem auto; 
-      max-width: 800px; 
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      line-height: 1.6;
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
     }
+    
     .container {
-      background: rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 20px;
-      padding: 3rem;
-      text-align: center;
-      box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-    }
-    h1 { 
-      font-size: 3rem; 
-      margin-bottom: 1rem; 
-      background: linear-gradient(45deg, #ffd700, #ff6b6b);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    .subtitle {
-      font-size: 1.2rem;
-      margin-bottom: 3rem;
-      opacity: 0.9;
-    }
-    .tools-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 2rem;
-      margin-top: 2rem;
-    }
-    .tool-card {
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 15px;
+      max-width: 600px;
       padding: 2rem;
-      text-decoration: none;
-      color: white;
-      transition: all 0.3s ease;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      position: relative;
-      overflow: hidden;
+      text-align: center;
     }
-    .tool-card:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 15px 35px rgba(31, 38, 135, 0.5);
-      background: rgba(255, 255, 255, 0.2);
-    }
-    .tool-card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-      transform: translateX(-100%);
-      transition: transform 0.6s;
-    }
-    .tool-card:hover::before {
-      transform: translateX(100%);
-    }
-    .tool-icon {
+    
+    h1 {
       font-size: 3rem;
-      margin-bottom: 1rem;
+      font-weight: 300;
+      margin-bottom: 0.5rem;
+      color: #ff6b35;
+      letter-spacing: -1px;
+    }
+    
+    .subtitle {
+      font-size: 1.1rem;
+      color: #888;
+      margin-bottom: 3rem;
+      font-weight: 400;
+    }
+    
+    .tools {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    
+    .tool {
       display: block;
+      padding: 1.5rem 2rem;
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      text-decoration: none;
+      color: #e0e0e0;
+      transition: all 0.2s ease;
+      position: relative;
     }
+    
+    .tool:hover {
+      background: #1a1a1a;
+      border-color: #333;
+      transform: translateY(-1px);
+    }
+    
     .tool-title {
-      font-size: 1.5rem;
-      font-weight: bold;
-      margin-bottom: 1rem;
+      font-size: 1.2rem;
+      font-weight: 500;
+      color: #ff6b35;
+      margin-bottom: 0.5rem;
     }
-    .tool-description {
-      opacity: 0.9;
-      line-height: 1.5;
+    
+    .tool-desc {
+      color: #aaa;
+      font-size: 0.95rem;
     }
-    .footer {
-      margin-top: 3rem;
-      opacity: 0.7;
-      font-size: 0.9rem;
+    
+    @media (max-width: 640px) {
+      .container {
+        padding: 1rem;
+      }
+      
+      h1 {
+        font-size: 2.5rem;
+      }
+      
+      .tool {
+        padding: 1.25rem 1.5rem;
+      }
     }
   </style>
 </head>
 <body>
-  <script>
-    // Ensure links work correctly with reverse proxy
-    document.addEventListener('DOMContentLoaded', function() {
-      const currentPath = window.location.pathname;
-      const basePath = currentPath.endsWith('/') ? currentPath : currentPath + '/';
-      
-      // Update all relative links to be absolute based on current path
-      document.querySelectorAll('a[href^="./"]').forEach(link => {
-        const relativePath = link.getAttribute('href').substring(2); // remove './'
-        link.href = basePath + relativePath;
-      });
-    });
-  </script>
   <div class="container">
-    <h1>ElevenLabs AI Tools</h1>
-    <div class="subtitle">Choose your AI-powered voice experience</div>
+    <h1>Comedy Colliders</h1>
+    <div class="subtitle">AI voice tools for creators</div>
     
-    <div class="tools-grid">
-      <a href="./text-to-voice/" class="tool-card">
-        <div class="tool-icon">📝</div>
+    <div class="tools">
+      <a href="./text-to-voice/" class="tool">
         <div class="tool-title">Text-to-Voice</div>
-        <div class="tool-description">
-          Convert written text into natural-sounding speech using ElevenLabs' advanced TTS technology. 
-          Perfect for creating voiceovers, audiobooks, or accessibility features.
-        </div>
+        <div class="tool-desc">Convert text into natural speech</div>
       </a>
       
-      <a href="./voice-to-voice/" class="tool-card">
-        <div class="tool-icon">🗣️</div>
+      <a href="./voice-to-voice/" class="tool">
         <div class="tool-title">Voice-to-Voice</div>
-        <div class="tool-description">
-          Have real-time conversations with AI agents using natural speech. 
-          Powered by ElevenLabs Conversational AI and enhanced with Claude for intelligent responses.
-        </div>
+        <div class="tool-desc">Real-time AI conversations</div>
       </a>
-    </div>
-    
-    <div class="footer">
-      Built with ❤️ using ElevenLabs API
+      
+      <a href="./audio-out/" class="tool">
+        <div class="tool-title">Audio Output Test</div>
+        <div class="tool-desc">Test audio playback compatibility</div>
+      </a>
     </div>
   </div>
 </body>
