@@ -19,8 +19,8 @@ def trim_trailing_slash [] {
       $in | .append server-test -c audio-capture
       "ok"
     }
-    $updated_req => {
-      .static "www" $updated_req.path
+    _ => {
+      .static "www" $req.path
     }
   }
 }
