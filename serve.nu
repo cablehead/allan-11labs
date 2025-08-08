@@ -16,7 +16,7 @@ def trim_trailing_slash [] {
       "ok"
     }
     {path: "/server-submit" , method: "POST"} => {
-      lines | each { .append server-test -c audio-capture }
+      .append server-test -c audio-capture
       "ok"
     }
     _ => {
