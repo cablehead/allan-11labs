@@ -12,11 +12,11 @@ def trim_trailing_slash [] {
 {|req|
   match ($req | update path { trim_trailing_slash }) {
     {path: "/audio-to-server" , method: "POST"} => {
-      $in | .append capture -c audio-capture
+      .append capture -c audio-capture
       "ok"
     }
     {path: "/server-submit" , method: "POST"} => {
-      $in | .append server-test -c audio-capture
+      lines | each { .append server-test -c audio-capture }
       "ok"
     }
     _ => {
