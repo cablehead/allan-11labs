@@ -1,19 +1,26 @@
-
 use /root/.config/nushell/scripts/xs.nu *
 
-{
-|req|
-
- let body = $in
-
-  if $req.path in ["/audio-to-server" "/audio-to-server/"] and $req.method == "POST" {
-
-    $body |  .append capture -c audio-capture
-
-
-  	return "ok"
+def trim_trailing_slash [] {
+  let trimmed = $in | str trim --right --char '/'
+  if ($trimmed | is-empty) {
+    '/'
+  } else {
+    $trimmed
   }
+}
 
-
-.static "www" $req.path
+{|req|
+  match ($req | update path { trim_trailing_slash }) {
+    {path: "/audio-to-server" , method: "POST"} => {
+      $in | .append capture -c audio-capture
+      "ok"
+    }
+    {path: "/server-submit" , method: "POST"} => {
+      $in | .append server-test -c audio-capture
+      "ok"
+    }
+    $updated_req => {
+      .static "www" $updated_req.path
+    }
+  }
 }

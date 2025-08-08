@@ -169,12 +169,16 @@
     let worklet = null;
     let isCapturing = false;
     let isShuttingDown = false;
+    let pendingRequests = new Set();
     let stats = {
       chunks: 0,
       bytes: 0,
       lastLevel: 0,
-      serverResponses: 0
+      serverResponses: 0,
+      requestsDropped: 0
     };
+    let requestCounter = 0;
+    const MAX_CONCURRENT_REQUESTS = 3;
     let sessionId = null;
 
     function addLog(msg) {
@@ -191,7 +195,7 @@
       $('totalBytes').textContent = (stats.bytes / 1024).toFixed(1) + 'KB';
       $('sampleRate').textContent = audioCtx ? audioCtx.sampleRate + 'Hz' : '-';
       $('audioLevel').textContent = Math.round(stats.lastLevel * 100) + '%';
-      $('serverResponses').textContent = stats.serverResponses;
+      $('serverResponses').textContent = `${stats.serverResponses} (${pendingRequests.size} pending)`;
     }
 
     function detectDevice() {
@@ -237,6 +241,21 @@
         return;
       }
 
+      // Create an AbortController for this request
+      const abortController = new AbortController();
+      requestCounter++;
+      const requestId = `req_${requestCounter}`;
+      const startTime = Date.now();
+      
+      // Track this pending request
+      const requestInfo = { abortController, requestId, startTime };
+      pendingRequests.add(requestInfo);
+      
+      // Log request start (only first few and then periodically)
+      if (requestCounter <= 10 || requestCounter % 20 === 0) {
+        addLog(`📤 Starting request ${requestId} (${pendingRequests.size} pending)`);
+      }
+
       try {
         // Convert ArrayBuffer to base64 for JSON transmission
         const view = new Uint8Array(audioData);
@@ -258,28 +277,55 @@
             sessionId: sessionId,
             audioData: b64,
             timestamp: Date.now()
-          })
+          }),
+          signal: abortController.signal  // Allow request to be aborted
         });
+
+        // Double-check we're still capturing (request might have completed after stop)
+        if (!isCapturing || isShuttingDown) {
+          addLog(`⚠️ Request completed after stop - ignoring result`);
+          return;
+        }
 
         // Just check for 200 OK - fire and forget
         if (response.ok) {
+          const duration = Date.now() - startTime;
           stats.serverResponses++;
           updateStats();
           
-          // Log success only occasionally to avoid spam
-          if (stats.serverResponses <= 5 || stats.serverResponses % 50 === 0) {
-            addLog(`✓ Audio chunk sent successfully (#${stats.serverResponses})`);
+          // Log success with timing info
+          if (stats.serverResponses <= 10 || stats.serverResponses % 20 === 0) {
+            addLog(`✓ ${requestId} completed successfully in ${duration}ms (#${stats.serverResponses})`);
           }
         } else {
-          addLog(`❌ HTTP ${response.status}: Failed to send audio chunk`);
+          addLog(`❌ ${requestId} HTTP ${response.status}: Failed to send audio chunk`);
         }
         
       } catch (error) {
+        // Check if this was an abort (expected during shutdown)
+        if (error.name === 'AbortError') {
+          addLog(`ℹ️ Request aborted: ${requestId}`);
+          return;
+        }
+        
         // Don't spam errors for network issues
         if (!window._lastNetworkError || Date.now() - window._lastNetworkError > 5000) {
           addLog(`❌ Network error: ${error.message}`);
           window._lastNetworkError = Date.now();
         }
+      } finally {
+        // Remove from pending requests
+        pendingRequests.forEach(req => {
+          if (req.requestId === requestId) {
+            pendingRequests.delete(req);
+            
+            // Log completion timing for slow requests
+            const duration = Date.now() - startTime;
+            if (duration > 2000) {
+              addLog(`⏱️ ${requestId} took ${duration}ms to complete`);
+            }
+          }
+        });
       }
     }
 
@@ -293,8 +339,10 @@
       try {
         addLog('🚀 Starting server-based audio capture...');
         
-        // Reset shutdown flag
+        // Reset flags and clear any leftover state
         isShuttingDown = false;
+        pendingRequests.clear();
+        requestCounter = 0;
         
         // Start server session first
         if (!(await startSession())) {
@@ -416,6 +464,16 @@
       // Set flags to stop ALL processing immediately
       isShuttingDown = true;
       isCapturing = false;
+      
+      // Abort all pending HTTP requests
+      if (pendingRequests.size > 0) {
+        addLog(`🛫d Aborting ${pendingRequests.size} pending requests...`);
+        pendingRequests.forEach(req => {
+          req.abortController.abort();
+        });
+        pendingRequests.clear();
+        addLog(`✓ All pending requests aborted`);
+      }
       
       if (worklet) {
         // Clear the message handler FIRST to stop processing any queued messages

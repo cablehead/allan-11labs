@@ -1,0 +1,25 @@
+{
+  "proto": "HTTP/1.1",
+  "method": "POST",
+  "remote_ip": "127.0.0.1",
+  "remote_port": 58480,
+  "headers": {
+    "host": "ndyg.cross.stream",
+    "accept": "*/*",
+    "content-type": "application/j\nson",
+    "origin": "https://ndyg.cross.stream",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "cors",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.\n15",
+    "referer": "https://ndyg.cross.stream/colliders/server-submit/",
+    "sec-fetch-dest": "empty",
+    "content-length": "62",
+    "accept-language": "en-US,en;q=0.9",
+    "priority": "u=3, i",
+    "accept-encoding": "gzip, deflate, br",
+    "connection": "keep-\nalive"
+  },
+  "uri": "/server-submit",
+  "path": "/server-submit",
+  "query": {}
+}

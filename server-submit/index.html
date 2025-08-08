@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Latency Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        #submitBtn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 15px 30px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        #submitBtn:hover:not(:disabled) {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+        }
+        
+        #submitBtn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        #result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        #currentUrl {
+            font-family: monospace;
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            word-break: break-all;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Server Latency Test</h1>
+        <p>This page will submit the current date to the server and measure the response time.</p>
+        
+        <div id="currentUrl"></div>
+        
+        <button id="submitBtn" onclick="testLatency()">Test Server Latency</button>
+        
+        <div id="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        // Get the current base URL dynamically
+        function getBaseUrl() {
+            const currentPath = window.location.pathname;
+            // Remove /server-submit from the end to get the base path
+            const basePath = currentPath.replace(/\/server-submit\/?.*$/, '');
+            return window.location.origin + basePath + '/server-submit';
+        }
+
+        // Display the current URL that will be used
+        function displayCurrentUrl() {
+            const baseUrl = getBaseUrl();
+            document.getElementById('currentUrl').textContent = 'Target URL: ' + baseUrl;
+        }
+
+        function showResult(message, type) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = message;
+            resultDiv.className = type;
+            resultDiv.style.display = 'block';
+        }
+
+        async function testLatency() {
+            const button = document.getElementById('submitBtn');
+            const baseUrl = getBaseUrl();
+            
+            button.disabled = true;
+            button.textContent = 'Testing...';
+            
+            showResult('Sending request...', 'info');
+            
+            try {
+                const startTime = performance.now();
+                const currentDate = new Date().toISOString();
+                
+                const response = await fetch(baseUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        timestamp: currentDate,
+                        test: 'latency-test'
+                    })
+                });
+                
+                const endTime = performance.now();
+                const latency = Math.round(endTime - startTime);
+                
+                if (response.ok) {
+                    const responseText = await response.text();
+                    if (responseText.trim() === 'ok') {
+                        showResult(`✅ Success! Server responded with "ok" in ${latency}ms`, 'success');
+                    } else {
+                        showResult(`⚠️ Server responded in ${latency}ms but returned: "${responseText}"`, 'info');
+                    }
+                } else {
+                    showResult(`❌ Server error (${response.status}): ${response.statusText} - Latency: ${latency}ms`, 'error');
+                }
+                
+            } catch (error) {
+                showResult(`❌ Request failed: ${error.message}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Test Server Latency';
+            }
+        }
+
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            displayCurrentUrl();
+        });
+    </script>
+</body>
+</html>
