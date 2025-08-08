@@ -6,7 +6,7 @@ HTTP server handler with structured matching and path normalization.
 
 ```bash
 cd tests
-nu run.nu
+nu serve-tests.nu
 ```
 
 Tests use stubbing pattern: `source serve.nu` → `def stubs` → `"body" | do $c request`

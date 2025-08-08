@@ -13,7 +13,7 @@ def assert_contains [haystack: string, needle: string, context: string = ""] {
 }
 
 # Test cases as closures
-export def test_cases [] {
+def test_cases [] {
     [
         {||
             print "Testing POST /server-submit..."
@@ -108,4 +108,31 @@ export def test_cases [] {
             print "✓ Original path preservation test passed"
         }
     ]
+}
+
+# Main function to run all tests
+def main [] {
+    print "Running serve.nu tests...\n"
+    
+    let test_list = (test_cases)
+    let results = ($test_list | each {|test_case| 
+        try {
+            do $test_case
+            {status: "pass"}
+        } catch { |e|
+            print $"✗ Test failed: ($e.msg)"
+            {status: "fail", error: $e.msg}
+        }
+    })
+    
+    let passed = ($results | where status == "pass" | length)
+    let failed = ($results | where status == "fail" | length)
+    
+    print $"\n📊 Results: ($passed) passed, ($failed) failed"
+    
+    if $failed > 0 {
+        exit 1
+    } else {
+        print "✅ All tests passed!"
+    }
 }
